@@ -1,0 +1,282 @@
+\documentclass[11pt,a4paper]{article}
+
+% ----------------------------------------------------------------------
+% Protocol: raw recording -> BuzzSuite app (intake, tracking, plot)
+% Written for someone with very little coding experience.
+% ----------------------------------------------------------------------
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{titlesec}
+
+\definecolor{appblue}{RGB}{30,90,160}
+\definecolor{lightgray}{RGB}{240,240,240}
+\definecolor{treegray}{RGB}{250,250,245}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=appblue,
+  urlcolor=appblue
+}
+
+\titleformat{\section}{\Large\bfseries\color{appblue}}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.5em}{}
+
+% A box for important tips / warnings
+\newtcolorbox{tipbox}[1]{colback=lightgray,colframe=appblue,
+  fonttitle=\bfseries,title=#1,boxrule=0.6pt,arc=2mm}
+
+% A box for the folder-tree diagram
+\newtcolorbox{treebox}{colback=treegray,colframe=appblue!60,
+  boxrule=0.6pt,arc=2mm,left=8pt,right=8pt,top=6pt,bottom=6pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\title{\textbf{BuzzSuite: From Recording to Data}\\[4pt]
+\large A Simple Step-by-Step Protocol}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\vspace{-1.5em}
+\begin{center}
+\textit{No coding required --- just clicking, naming things, and selecting files.}\\[2pt]
+\textit{\small The Activity module used in this protocol is BuzzSuite's activity-tracking
+pipeline (built on the original BuzzWatch tracking engine) --- this protocol covers that
+path from raw video to the activity plot, start to finish.}
+\end{center}
+
+\hrule
+\vspace{1em}
+
+\begin{tipbox}{The workflow at a glance}
+\begin{enumerate}[leftmargin=*,itemsep=1pt]
+  \item Collect your \texttt{.h264} video data from the camera.
+  \item Open \textbf{BuzzSuite} and use the \textbf{Intake wizard} to load the video and create
+        the experiment --- this also converts \texttt{.h264} to \texttt{.mp4} for you, no separate
+        app needed.
+  \item Extract a background image and draw the cage borders.
+  \item Run tracking.
+  \item Make the activity plot.
+\end{enumerate}
+\end{tipbox}
+
+% ----------------------------------------------------------------------
+\section{Step 1 --- Collect your \texttt{.h264} data}
+
+Copy the \texttt{.h264} video files off the \textbf{Raspberry Pi} onto the
+computer. Put them somewhere you can find them (you will point BuzzSuite at
+them in Step~2).
+
+% ----------------------------------------------------------------------
+\section{Step 2 --- Open BuzzSuite and create the experiment}
+
+\subsection*{2.1 --- Launch the app}
+
+Double-click \texttt{run\_buzzsuite.bat} (or its desktop shortcut) in the BuzzSuite folder.
+
+\begin{tipbox}{If Windows shows a blue ``Windows protected your PC'' warning}
+Click \textbf{``More info''}, then \textbf{``Run anyway''}. This is normal and
+safe here.
+\end{tipbox}
+
+A welcome screen appears first. Click \textbf{``New experiment $\rightarrow$''} to jump straight
+into setup (or, if you're continuing work on an experiment you already created, select it from the
+\textbf{recent experiments} list, or use \textbf{``Browse for experiment\ldots''}, then click
+\textbf{``Continue $\rightarrow$''}).
+
+\subsection*{2.2 --- The Intake wizard}
+\textit{(Tab: \texttt{1} \textperiodcentered\ \texttt{Setup} $\to$ sub-tab \texttt{Experiment \& Video})}
+
+This one screen replaces what used to be a separate folder-creation step and a separate Convert
+app. Work through it top to bottom:
+
+\begin{enumerate}[label=\textbf{\Alph*\ ---}\ ,leftmargin=*,itemsep=8pt]
+  \item \textbf{Source video folder.} Click \textbf{Browse\ldots} and select the folder
+        with your \texttt{.h264} files (from Step~1), then click \textbf{Scan}. BuzzSuite lists
+        how many video segments and dates it found.
+
+  \item \textbf{Dates to include.} A checkbox appears for every recording date found. All
+        are ticked by default --- untick any date you don't want included.
+
+  \item \textbf{Experiment setup.} Fill in these boxes, then click
+        \textbf{``Create / open experiment''}:
+
+\begin{description}[leftmargin=0pt,style=nextline]
+  \item[Experiment:] type \texttt{Flare}. (Empty by default.)
+  \item[Incubator:] \texttt{Cakung} \quad or \quad \texttt{Bangkok} \quad (pick from the dropdown)
+  \item[Species:] e.g.\ \texttt{AedesAegypti}
+  \item[Sex:] \texttt{F} or \texttt{M} (pick from the dropdown)
+  \item[Cage name:] BuzzSuite fills this in for you from Species + Sex + the dates you ticked in
+    Step~B (e.g.\ \texttt{AedesAegypti\_M\_20260721\_20260722}). \textbf{You can type over it}
+    if you'd rather keep the older short style, e.g.\ \texttt{AedesAegyptiM\_21-22}.
+\end{description}
+
+\begin{tipbox}{Don't mix up the two ``Cage'' fields}
+\textbf{Incubator} (\texttt{Cakung}/\texttt{Bangkok}) is what used to be called ``Cage Name''.
+\textbf{Cage name} is a different box --- it's the actual experiment folder name (what used to be
+called ``Batch Name''). Same idea as before, just split across two clearly-named boxes now.
+\end{tipbox}
+
+BuzzSuite creates the experiment folder for you automatically --- there is no more manual folder
+creation in File Explorer. For reference, this is what gets built behind the scenes:
+
+\begin{treebox}
+\ttfamily
+\textless your data drive\textgreater\textbackslash Buzzwatch\\
+\hspace*{1em}\textbackslash--\ Recording\\
+\hspace*{3em}\textbackslash--\ Flare\hfill\textnormal{\itshape\small (= your ``Experiment'' box)}\\
+\hspace*{5em}\textbackslash--\ Cakung\hfill\textnormal{\itshape\small (= your ``Incubator'' box)}\\
+\hspace*{7em}\textbackslash--\ \textbf{AedesAegyptiM\_21-22}\hfill\textnormal{\itshape\small (= your ``Cage name'' box)}\\
+\end{treebox}
+
+You don't need to know or type this path --- BuzzSuite finds your data drive automatically.
+
+  \item \textbf{Convert / move video into the experiment.} Click
+        \textbf{``Convert / move selected dates''}. Any \texttt{.h264} files are losslessly
+        converted to \texttt{.mp4}; any files that are already \texttt{.mp4} are copied straight
+        in. A progress bar shows how far along it is. Wait for it to finish.
+\end{enumerate}
+
+\begin{tipbox}{A separate H264 $\to$ MP4 Converter tab also exists}
+If you ever want to convert video without going through the wizard (e.g.\ into a folder outside a
+BuzzSuite experiment), there's also a standalone \textbf{``H264 $\to$ MP4 Converter''} tab along
+the top of the app that does the same conversion. For the normal workflow, Step~D above is all you
+need.
+\end{tipbox}
+
+% ----------------------------------------------------------------------
+\section{Step 3 --- Background image and cage borders}
+\textit{(Tab: \texttt{1} \textperiodcentered\ \texttt{Setup} $\to$ sub-tab \texttt{Background \& Cage Border})}
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Extract Images from Video.}\\
+        Click the button and wait until it finishes.
+
+  \item \textbf{Get Background from Images.}\\
+        Click the button and wait. \emph{This one takes a while to run.}
+
+  \item \textbf{Draw the cage borders.}
+  \begin{enumerate}[label=\alph*.]
+    \item Click \textbf{Show background with borders} (the cage image appears on the right).
+    \item Click \textbf{Draw Cage Borders} --- a separate image window opens.
+    \item Click the \textbf{four corners of the cage} --- \textbf{any order is fine},
+          BuzzSuite automatically works out which corner is which.
+    \item After the 4th click, a box is drawn joining the corners. Press any key to close the
+          window --- the borders are saved automatically.
+  \end{enumerate}
+\end{enumerate}
+
+\begin{center}
+\begin{verbatim}
+        (*)---------------(*)
+         |                 |
+         |      cage       |
+         |                 |
+        (*)---------------(*)
+\end{verbatim}
+\textit{\small click the four corners in any order}
+\end{center}
+
+If you ever need to redo this, click \textbf{Reset Drawn Borders} first.
+
+% ----------------------------------------------------------------------
+\section{Step 4 --- Run tracking}
+
+There are two ways to do this --- pick whichever you prefer. \textbf{4.2 (the Experiment
+Dashboard) works perfectly well for a single experiment too}, not just several at once, so
+don't feel you need to use 4.1 just because you're only tracking one.
+
+\subsection*{4.1 --- The Single experiment tab}
+\textit{(Tab: \texttt{2} \textperiodcentered\ \texttt{Analysis} $\to$ sub-tab \texttt{Single experiment})}
+
+\begin{enumerate}[leftmargin=*]
+  \item Choose \textbf{what to track}:
+  \begin{itemize}
+    \item \textbf{All untracked (batch)} --- the normal choice; tracks every video segment that
+          hasn't been tracked yet and skips ones already done. \emph{(This is selected by
+          default.)}
+    \item \textbf{Specific segments} --- pick individual segments from a list.
+    \item \textbf{Time range} --- pick a start and end time.
+  \end{itemize}
+
+  \item Click \textbf{``Run tracking''}. \emph{This normally takes several hours} --- you don't
+        need to set anything else first; BuzzSuite manages processing power automatically.
+
+  \item \textbf{(Optional)} If you want to filter out unrealistic flight speeds, use the
+        \textbf{Speed filter} box (Min/Max, or leave \textbf{``Auto Detect''} ticked --- it is by
+        default) and click \textbf{``Run Speed Filter''}. This is usually not needed.
+\end{enumerate}
+
+That's it for this tab --- once tracking finishes, BuzzSuite automatically saves and combines the
+data for you. There is no separate ``Concatenate'' or ``Load Data'' step anymore.
+
+\subsection*{4.2 --- Or use the Experiment Dashboard}
+\textit{(Tab: \texttt{2} \textperiodcentered\ \texttt{Analysis} $\to$ sub-tab \texttt{Multiple experiments})}
+
+This does the same tracking job as 4.1, with a clearer per-experiment progress view. Use it for
+one experiment, or several at once --- it works the same way either way:
+
+\begin{enumerate}[leftmargin=*]
+  \item Pick the experiment from the \textbf{Experiment} dropdown (it lists your 10 most recently
+        opened experiments), or click \textbf{Browse\ldots} to pick any other one.
+
+  \item Click \textbf{``Add to dashboard''}. This adds it as a row \textbf{without} starting
+        tracking yet. If you want to track more than one experiment together, repeat this step
+        for each of them first.
+
+  \item Click \textbf{``Start''} on that row to begin tracking it --- or, if you've added more
+        than one, click \textbf{``Start all queued''} to begin all of them together.
+
+  \item Each row shows its own progress bar and status (\emph{queued} $\to$ \emph{starting}
+        $\to$ \emph{tracking i/N segments} $\to$ \emph{concatenating} $\to$ \emph{done}), and a
+        \textbf{Cancel} button if you need to stop it partway through.
+
+  \item On the right, a \textbf{``Live file progress''} panel shows the progress of each
+        individual video segment currently being tracked.
+\end{enumerate}
+
+If you do track more than one experiment at once, BuzzSuite automatically splits processing power
+between whichever jobs are running --- there's no need to set worker numbers by hand or open a
+second copy of the app. (You still need to finish Step~3, background \& borders, for each
+experiment individually before tracking it, by switching which experiment is loaded on the
+\texttt{1} \textperiodcentered\ \texttt{Setup} tab.)
+
+% ----------------------------------------------------------------------
+\section{Step 5 --- Make the activity plot}
+\textit{(Tab: \texttt{3} \textperiodcentered\ \texttt{Plotting} $\to$ sub-tab \texttt{Activity (in-cage)})}
+
+\begin{enumerate}[leftmargin=*]
+  \item Click \textbf{``Add experiment''} (pick it from the recent-experiments dropdown, or
+        \textbf{Browse\ldots}) to load its tracked data in.
+
+  \item In the \textbf{dates table} below, tick which dates to include, and mark each one
+        \textbf{LD} (normal light:dark cycle) or \textbf{DD} (constant dark) --- \textbf{LD} is
+        the default for every date. Use \textbf{``All LD''} / \textbf{``All DD''} to set them all
+        at once. Click \textbf{``Save LD/DD tags''} to keep this for next time.
+
+  \item Under \textbf{Plot}, leave \textbf{Variable} on its default
+        (\texttt{total\_pixels\_moved} --- overall movement per minute), or pick a different one
+        from the dropdown.
+
+  \item Choose how you want it laid out (\textbf{Output}):
+  \begin{itemize}
+    \item \textbf{Individual} --- one panel per date \emph{(default)}
+    \item \textbf{Overlay} --- every date on one 24-hour axis, useful for comparing days
+    \item \textbf{Continuous} --- one panel with real calendar time running along the bottom
+  \end{itemize}
+
+  \item Click \textbf{``Plot''} --- this is the \textbf{activity plot}. Click \textbf{``Save
+        PNG''} to save it as an image file.
+\end{enumerate}
+
+\end{document}

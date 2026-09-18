@@ -1,0 +1,72 @@
+assembly:
+  max_distance_search: 50
+  time_window_search: 20
+cage_border_points:
+- - 43
+  - 29
+- - 628
+  - 34
+- - 639
+  - 639
+- - 33
+  - 639
+control_border_points:
+- - 246
+  - 86
+- - 432
+  - 86
+- - 417
+  - 140
+- - 265
+  - 139
+mosquito_tracks: 10
+seg_moving:
+  dist_moving_obj: 30
+  gray_tresh: 6
+  max_elongation_ratio: 20
+  max_length: 40
+  min_length: 1
+seg_resting:
+  dist_resting_obj: 15
+  gray_tresh: 30
+  max_elongation_ratio: 20
+  max_length: 40
+  min_length: 1
+square_3_border_points:
+- - 91
+  - 238
+- - 137
+  - 261
+- - 132
+  - 413
+- - 87
+  - 430
+square_4_border_points:
+- - 537
+  - 262
+- - 583
+  - 241
+- - 586
+  - 438
+- - 539
+  - 423
+sugar_border_points:
+- - 246
+  - 592
+- - 262
+  - 547
+- - 409
+  - 545
+- - 435
+  - 593
+track_moving:
+  maxDisappeared: 5
+  max_numb_object: 10000
+  maxdistnewobject: 100
+  maxdisttracking: 200
+  min_duration_moving_traj: 20
+track_resting:
+  maxDisappeared: 30
+  max_numb_object: 10000
+  maxdisttracking: 5
+  min_duration_resting_traj: 125

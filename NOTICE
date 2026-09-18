@@ -1,0 +1,17 @@
+BuzzSuite
+Copyright (c) 2026 Alberto Thornton
+
+This software is licensed under the MIT License (see LICENSE).
+
+Third-party attribution
+------------------------
+The `buzzwatch_data_analysis/` package (the activity-tracking engine: background
+extraction, the flying/resting trackers, and the per-experiment analysis pipeline)
+is derived from the original BuzzWatch project, credited in-source as the
+"BuzzWatch Analysis Team". The package name and its internal class names are kept
+unchanged from the original so that existing `.pkl` tracking files (which store
+these names as part of their serialized format) continue to load correctly.
+
+If you are the original BuzzWatch author/maintainer and would like different
+attribution, or can confirm the license terms of the original work, please open
+an issue.
