@@ -14,6 +14,7 @@ import yaml
 import time
 from scipy.spatial import distance as dist
 import scipy.sparse.csgraph as graph
+from scipy.sparse import lil_matrix
 import matplotlib.pyplot as plt
 from scipy.ndimage.filters import uniform_filter1d
 from matplotlib.collections import LineCollection
@@ -1801,30 +1802,40 @@ class single_video_analysis:
                 list_of_ID_resting = list(resting_object_tracks.objects.keys())
                 list_of_ID_moving = list(moving_object_tracks.objects.keys())
 
-                matching_matrix = np.zeros((len(list_of_ID_resting)+len(list_of_ID_moving),len(list_of_ID_resting)+len(list_of_ID_moving)))
+                # matching_matrix is a track-to-track boot-linking matrix, N = total resting+moving
+                # tracks in this segment. It is EXTREMELY sparse (each track contributes at most 2
+                # entries, for its start/end boot link) but a dense np.zeros((N,N)) is allocated by
+                # N, not by the (tiny) number of actual links -- on dense sessions N reaches the tens
+                # of thousands, which is a multi-GB allocation (confirmed crash: N=26313 -> 5.16 GiB
+                # float64) and OOMs the worker. lil_matrix stores only the cells actually written
+                # (same loop, same order, same [row, col] = value assignments below), so this never
+                # allocates more than O(actual links) regardless of N. See DEVLOG for the parity test
+                # proving this produces bit-identical matched_ids to the old dense computation.
+                n_tracks = len(list_of_ID_resting) + len(list_of_ID_moving)
+                matching_matrix = lil_matrix((n_tracks, n_tracks), dtype=np.float64)
 
                 # Loop through resting objects
                 for i,rest_id in enumerate(list_of_ID_resting):
                     #Check start boot
                     if np.isnan(resting_object_tracks.objects[rest_id]["start_boot"])==0:
                         if resting_object_tracks.objects[rest_id]["start_type"] == "moving":
-                            
+
                             j = list_of_ID_moving.index(resting_object_tracks.objects[rest_id]["start_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i][j] = -1
+                            matching_matrix[i, j] = -1
                         elif resting_object_tracks.objects[rest_id]["start_type"] == "resting":
-                            
+
                             j = list_of_ID_resting.index(resting_object_tracks.objects[rest_id]["start_boot"])
-                            matching_matrix[i][j] = -1
+                            matching_matrix[i, j] = -1
 
                     #Check end boot
                     if np.isnan(resting_object_tracks.objects[rest_id]["end_boot"])==0:
                         if resting_object_tracks.objects[rest_id]["end_type"] == "moving":
                             j = list_of_ID_moving.index(resting_object_tracks.objects[rest_id]["end_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i][j] = 1
+                            matching_matrix[i, j] = 1
                         elif resting_object_tracks.objects[rest_id]["end_type"] == "resting":
-                            
+
                             j = list_of_ID_resting.index(resting_object_tracks.objects[rest_id]["end_boot"])
-                            matching_matrix[i][j] = 1
+                            matching_matrix[i, j] = 1
 
                 # Loop through moving objects
                 for i,mov_id in enumerate(list_of_ID_moving):
@@ -1833,23 +1844,26 @@ class single_video_analysis:
                         if moving_object_tracks.objects[mov_id]["start_type"] == "moving":
                             j = list_of_ID_moving.index(moving_object_tracks.objects[mov_id]["start_boot"])+len(list_of_ID_resting)
                             #print(j)
-                            matching_matrix[i+len(list_of_ID_resting)][j] = -1
+                            matching_matrix[i+len(list_of_ID_resting), j] = -1
                         elif moving_object_tracks.objects[mov_id]["start_type"] == "resting":
                             j = list_of_ID_resting.index(moving_object_tracks.objects[mov_id]["start_boot"])
-                            matching_matrix[i+len(list_of_ID_resting)][j] = -1
+                            matching_matrix[i+len(list_of_ID_resting), j] = -1
 
                     #Check end boot
                     if np.isnan(moving_object_tracks.objects[mov_id]["end_boot"])==0:
                         if moving_object_tracks.objects[mov_id]["end_type"] == "moving":
                             j = list_of_ID_moving.index(moving_object_tracks.objects[mov_id]["end_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i+len(list_of_ID_resting)][j] = 1
+                            matching_matrix[i+len(list_of_ID_resting), j] = 1
                         elif moving_object_tracks.objects[mov_id]["end_type"] == "resting":
                             j = list_of_ID_resting.index(moving_object_tracks.objects[mov_id]["end_boot"])
-                            matching_matrix[i+len(list_of_ID_resting)][j] = 1
+                            matching_matrix[i+len(list_of_ID_resting), j] = 1
 
-                matching_matrix_graph = np.where((matching_matrix==-1) | (matching_matrix==1),1,0)
-                #print(matching_matrix_graph)
-                
+                # Every stored entry above is exactly -1 or 1 (never 0), so "nonzero" and
+                # "(==-1)|(==1)" select the identical set of cells -- .astype(bool) keeps the sparse
+                # structure (no dense allocation) while producing the same 0/1 graph the old
+                # np.where(...) built densely.
+                matching_matrix_graph = matching_matrix.tocsr().astype(bool).astype(np.int64)
+
                 matched_ids = graph.connected_components(matching_matrix_graph)
                 
                 # Defensive check
