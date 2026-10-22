@@ -14,7 +14,7 @@ import yaml
 import time
 from scipy.spatial import distance as dist
 import scipy.sparse.csgraph as graph
-from scipy.sparse import lil_matrix
+from scipy.sparse import csr_matrix
 import matplotlib.pyplot as plt
 from scipy.ndimage.filters import uniform_filter1d
 from matplotlib.collections import LineCollection
@@ -101,17 +101,24 @@ def split_merged_contour(shape, contour, single_area, min_length):
 
     Returns a list of (x, y) centroids; falls back to the bounding-box centre if it cannot split.
 
-    Works on a padded crop around the contour instead of the whole frame. The full-frame version
-    cost ~20 ms per contour on 1920x1080 video whatever the contour's size, so frames with hundreds
-    of large blobs (a recording's first segment, while the camera is still focusing) took hours per
-    segment. The crop gives bit-identical output, in the same order (DEVLOG 2026-09-17: 6,880 real
-    contours / 44,028 centroids compared, 0 differences):
-      * pad = k + 2 >= the dilation radius + the 5x5 distance mask's reach, and every pixel outside
-        the contour is 0 in both versions, so distances and peaks on the contour are identical;
-      * the crop origin is rounded DOWN to even coordinates -- connectedComponents labels 2x2
-        blocks in raster order, and an odd origin shifts that grid and reorders the components;
-      * OpenCV's centroid is sum(coordinate) / area, so the exact integer sum is rebuilt in frame
-        coordinates before dividing (crop centroid + offset can differ in the last bit).
+    All the work is done on the contour's bounding box plus a zero margin, not on a full-frame
+    image (DEVLOG 2026-10-14): at 1080p the full-frame version cost ~18 ms per call, and footage
+    with 4-9 over-sized blobs in every frame spent 80-90% of its detection time here. The result is
+    bit-identical to the full-frame version, because outside the filled contour the full-frame mask,
+    distance map and local-maxima image are all zero:
+      - the ROI is clipped to the frame, so wherever the blob touches the frame edge the distance
+        transform and dilation see the same image border as before; elsewhere the margin (> the
+        5x5 distance mask and the k x k dilation radius) holds the same zeros the full frame had;
+      - the ROI's left edge is a multiple of 64 columns: OpenCV's IPP (SIMD) distance transform
+        rounds deep distances (> ~32 px) differently depending on a pixel's column modulo the
+        vector width (seen with any origin that is not a multiple of 4), so the ROI keeps the
+        full frame's column phase and every distance comes out with the same bits;
+      - the ROI's top edge is even (and so is the left edge), so OpenCV's 2x2-block
+        connected-components labelling scans the blocks in the same order and the peaks keep their
+        label order (= point order);
+      - OpenCV computes each centroid as double(integer pixel-coordinate sum) / area; the integer
+        sum is recovered exactly from the ROI centroid and shifted back by the ROI origin, so the
+        full-frame centroid is reproduced to the last bit.
     """
     import math
     (x, y, w, h) = cv2.boundingRect(contour)
@@ -119,24 +126,24 @@ def split_merged_contour(shape, contour, single_area, min_length):
     area = cv2.contourArea(contour)
     if not single_area or single_area <= 0 or area < 1.6 * single_area:
         return fallback
-    # Local-maxima detection: a pixel is a peak if it equals the dilation within a
-    # neighbourhood whose radius matches the expected single-mosquito radius.  This finds each
-    # mosquito's core independently of how deep the overall blob is (fixes the dense-crowd case
-    # where the old global threshold 0.5*max was too high and merged many peaks into one).
     radius = max(2, int(math.sqrt(single_area / math.pi)))
     k = max(3, 2 * radius - 1)   # odd kernel, ~mosquito diameter
-    pad = k + 2
-    x0 = max(0, x - pad)
-    y0 = max(0, y - pad)
-    x0 -= x0 % 2
+    margin = k + 2
+    x0 = max(0, x - margin)
+    y0 = max(0, y - margin)
+    x0 -= x0 % 64
     y0 -= y0 % 2
-    x1 = min(shape[1], x + w + pad)
-    y1 = min(shape[0], y + h + pad)
+    x1 = min(shape[1], x + w + margin)
+    y1 = min(shape[0], y + h + margin)
     mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
     cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED, offset=(-x0, -y0))
     dist_map = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
     if dist_map.max() <= 0:
         return fallback
+    # Local-maxima detection: a pixel is a peak if it equals the dilation within a
+    # neighbourhood whose radius matches the expected single-mosquito radius.  This finds each
+    # mosquito's core independently of how deep the overall blob is (fixes the dense-crowd case
+    # where the old global threshold 0.5*max was too high and merged many peaks into one).
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     dilated = cv2.dilate(dist_map, kernel)
     floor = max(1.0, radius * 0.4)   # ignore peaks shallower than ~half a mosquito radius
@@ -144,11 +151,11 @@ def split_merged_contour(shape, contour, single_area, min_length):
     n_labels, _, stats, centroids = cv2.connectedComponentsWithStats(local_max)
     pts = []
     for label in range(1, n_labels):  # skip background label 0
-        if stats[label, cv2.CC_STAT_AREA] >= max(1, (min_length * min_length) / 4.0):
-            n = int(stats[label, cv2.CC_STAT_AREA])
+        n_px = int(stats[label, cv2.CC_STAT_AREA])
+        if n_px >= max(1, (min_length * min_length) / 4.0):
             cx, cy = centroids[label]
-            pts.append(((int(round(float(cx) * n)) + n * x0) / n,
-                        (int(round(float(cy) * n)) + n * y0) / n))
+            pts.append(((int(round(float(cx) * n_px)) + n_px * x0) / n_px,
+                        (int(round(float(cy) * n_px)) + n_px * y0) / n_px))
     return pts if pts else fallback
 
 ##################################################################################################################################
@@ -156,9 +163,10 @@ def split_merged_contour(shape, contour, single_area, min_length):
 class _SparseFillMatrix:
     """Drop-in replacement for ``np.full((n_rows, n_cols), default_value)``, used ONLY by
     ``assemble_unmatched_moving_tracks``/``assemble_resting_and_moving_tracks`` and consumed ONLY
-    by ``find_optimal_matching_resting_moving_from_distance``. Supports exactly the API surface
-    those functions use (``m[i][j] = v``, ``m[i][j]``, ``m[r, c]``, ``.shape``, ``.min(axis=1)``,
-    ``.argmin(axis=1)``) -- it is NOT a general numpy substitute.
+    by ``find_optimal_matching_resting_moving_from_distance`` -- plus, as a write-only edge store
+    (``m[i][j] = v``, then ``.data``), by ``assemble_tracks_ids`` (DEVLOG 2026-10-14). Supports
+    exactly the API surface those functions use (``m[i][j] = v``, ``m[i][j]``, ``m[r, c]``,
+    ``.shape``, ``.min(axis=1)``, ``.argmin(axis=1)``) -- it is NOT a general numpy substitute.
 
     Why: on the densest real recording sessions, ``list_of_ID_moving``/``list_of_ID_still`` can
     reach 20,000+ tracks (see DEVLOG 2026-09-11 -- almost certainly itself a symptom of noisy
@@ -264,6 +272,70 @@ class _SparseMatrixRow:
 
     def __getitem__(self, col):
         return self._parent.data.get((self._row, col), self._parent.default)
+
+
+class _StreamingNanSum:
+    """Memory-bounded, bit-identical stand-in for ``rows = []; rows.append(np.array(r)); ...;
+    np.nansum(rows, axis=0)``, used ONLY by ``extract_mosquito_population_variables``.
+
+    Why: that function used to keep every track's full-video-length rows alive until the end (9 of
+    them per track, 8 bytes x N_frames each). On dense sessions (~12,000 tracks x ~30,000 frames)
+    that is ~25 GB per worker, plus the stacked and NaN-replaced copies np.nansum makes. It
+    exhausted the machine's memory, and because the call is wrapped in ``except Exception`` the
+    segment was then saved WITHOUT ``population_variables`` (794 segments by 2026-10-14, see
+    DEVLOG). Only the per-frame sums are ever used, so this keeps one running sum instead.
+
+    Exactness vs ``np.nansum(rows, axis=0)`` (which stacks the rows in their common dtype, replaces
+    NaN with 0 and reduces axis 0 row by row, in list order):
+      * float64 rows: NaN -> 0, then added to a float64 running sum in the same order.
+        (These rows only hold 0/1/NaN, so every partial sum is an exact integer anyway.)
+      * bool/integer rows (a track covering the whole trimmed window -- no NaN possible): cast to
+        float64 and added. If NO float64 row is ever added, numpy's result keeps the integer dtype,
+        so these rows are also kept until the first float64 row arrives (at most one per track
+        that spans the whole video) and the result is then literally
+        ``np.nansum(kept_rows, axis=0)``.
+      * no rows: literally ``np.nansum([], axis=0)``.
+      * any other dtype (never produced by the caller, whose rows are np.array() of NaN floats,
+        0/1 ints and bools): TypeError rather than silently computing something different.
+    """
+    __slots__ = ('_sum', '_n_rows', '_saw_float', '_exact_rows')
+
+    def __init__(self):
+        self._sum = None
+        self._n_rows = 0
+        self._saw_float = False
+        self._exact_rows = []
+
+    def add(self, row):
+        row = np.asarray(row)
+        if row.dtype == np.float64:
+            values = np.where(np.isnan(row), 0.0, row)
+            is_float = True
+        elif row.dtype == np.bool_ or np.issubdtype(row.dtype, np.integer):
+            values = row.astype(np.float64)
+            is_float = False
+        else:
+            raise TypeError("_StreamingNanSum: unsupported row dtype %s" % row.dtype)
+        if self._sum is None:
+            self._sum = values
+        elif values.shape != self._sum.shape:
+            raise ValueError("_StreamingNanSum: row shape %s does not match %s"
+                             % (values.shape, self._sum.shape))
+        else:
+            self._sum += values
+        self._n_rows += 1
+        if is_float:
+            self._saw_float = True
+            self._exact_rows = None
+        elif not self._saw_float:
+            self._exact_rows.append(row)
+
+    def result(self):
+        if self._n_rows == 0:
+            return np.nansum([], axis=0)
+        if self._saw_float:
+            return self._sum
+        return np.nansum(self._exact_rows, axis=0)
 
 
 ########################## Class that manages tracking of a single video ##############################################
@@ -1802,40 +1874,35 @@ class single_video_analysis:
                 list_of_ID_resting = list(resting_object_tracks.objects.keys())
                 list_of_ID_moving = list(moving_object_tracks.objects.keys())
 
-                # matching_matrix is a track-to-track boot-linking matrix, N = total resting+moving
-                # tracks in this segment. It is EXTREMELY sparse (each track contributes at most 2
-                # entries, for its start/end boot link) but a dense np.zeros((N,N)) is allocated by
-                # N, not by the (tiny) number of actual links -- on dense sessions N reaches the tens
-                # of thousands, which is a multi-GB allocation (confirmed crash: N=26313 -> 5.16 GiB
-                # float64) and OOMs the worker. lil_matrix stores only the cells actually written
-                # (same loop, same order, same [row, col] = value assignments below), so this never
-                # allocates more than O(actual links) regardless of N. See DEVLOG for the parity test
-                # proving this produces bit-identical matched_ids to the old dense computation.
-                n_tracks = len(list_of_ID_resting) + len(list_of_ID_moving)
-                matching_matrix = lil_matrix((n_tracks, n_tracks), dtype=np.float64)
+                # Sparse, not np.zeros((n, n)): only the start/end boot links (at most 2 per track)
+                # are ever set, yet the dense float64 matrix plus its comparison/np.where copies and
+                # scipy's own dense->CSR conversion cost ~26*n^2 bytes (~15 GB at n=24k; live crash:
+                # "Unable to allocate 4.45 GiB ... (24442, 24442) float64"). The loops below are
+                # unchanged. See DEVLOG 2026-10-14.
+                matching_matrix = _SparseFillMatrix(len(list_of_ID_resting)+len(list_of_ID_moving),len(list_of_ID_resting)+len(list_of_ID_moving),0.0)
 
                 # Loop through resting objects
                 for i,rest_id in enumerate(list_of_ID_resting):
                     #Check start boot
                     if np.isnan(resting_object_tracks.objects[rest_id]["start_boot"])==0:
                         if resting_object_tracks.objects[rest_id]["start_type"] == "moving":
-
+                            
                             j = list_of_ID_moving.index(resting_object_tracks.objects[rest_id]["start_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i, j] = -1
+                            matching_matrix[i][j] = -1
                         elif resting_object_tracks.objects[rest_id]["start_type"] == "resting":
-
+                            
                             j = list_of_ID_resting.index(resting_object_tracks.objects[rest_id]["start_boot"])
-                            matching_matrix[i, j] = -1
+                            matching_matrix[i][j] = -1
 
                     #Check end boot
                     if np.isnan(resting_object_tracks.objects[rest_id]["end_boot"])==0:
                         if resting_object_tracks.objects[rest_id]["end_type"] == "moving":
                             j = list_of_ID_moving.index(resting_object_tracks.objects[rest_id]["end_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i, j] = 1
+                            matching_matrix[i][j] = 1
                         elif resting_object_tracks.objects[rest_id]["end_type"] == "resting":
-
+                            
                             j = list_of_ID_resting.index(resting_object_tracks.objects[rest_id]["end_boot"])
-                            matching_matrix[i, j] = 1
+                            matching_matrix[i][j] = 1
 
                 # Loop through moving objects
                 for i,mov_id in enumerate(list_of_ID_moving):
@@ -1844,26 +1911,32 @@ class single_video_analysis:
                         if moving_object_tracks.objects[mov_id]["start_type"] == "moving":
                             j = list_of_ID_moving.index(moving_object_tracks.objects[mov_id]["start_boot"])+len(list_of_ID_resting)
                             #print(j)
-                            matching_matrix[i+len(list_of_ID_resting), j] = -1
+                            matching_matrix[i+len(list_of_ID_resting)][j] = -1
                         elif moving_object_tracks.objects[mov_id]["start_type"] == "resting":
                             j = list_of_ID_resting.index(moving_object_tracks.objects[mov_id]["start_boot"])
-                            matching_matrix[i+len(list_of_ID_resting), j] = -1
+                            matching_matrix[i+len(list_of_ID_resting)][j] = -1
 
                     #Check end boot
                     if np.isnan(moving_object_tracks.objects[mov_id]["end_boot"])==0:
                         if moving_object_tracks.objects[mov_id]["end_type"] == "moving":
                             j = list_of_ID_moving.index(moving_object_tracks.objects[mov_id]["end_boot"])+len(list_of_ID_resting)
-                            matching_matrix[i+len(list_of_ID_resting), j] = 1
+                            matching_matrix[i+len(list_of_ID_resting)][j] = 1
                         elif moving_object_tracks.objects[mov_id]["end_type"] == "resting":
                             j = list_of_ID_resting.index(moving_object_tracks.objects[mov_id]["end_boot"])
-                            matching_matrix[i+len(list_of_ID_resting), j] = 1
+                            matching_matrix[i+len(list_of_ID_resting)][j] = 1
 
-                # Every stored entry above is exactly -1 or 1 (never 0), so "nonzero" and
-                # "(==-1)|(==1)" select the identical set of cells -- .astype(bool) keeps the sparse
-                # structure (no dense allocation) while producing the same 0/1 graph the old
-                # np.where(...) built densely.
-                matching_matrix_graph = matching_matrix.tocsr().astype(bool).astype(np.int64)
-
+                # Same edge set as np.where((matching_matrix==-1) | (matching_matrix==1),1,0): one
+                # entry per cell holding -1 or 1. connected_components only uses which cells are
+                # edges, so its labels are identical to the dense version's.
+                edges = [cell for cell, v in matching_matrix.data.items() if v == -1 or v == 1]
+                n_nodes = matching_matrix.shape[0]
+                matching_matrix_graph = csr_matrix(
+                    (np.ones(len(edges)),
+                     (np.array([r for r, _ in edges], dtype=np.int64),
+                      np.array([c for _, c in edges], dtype=np.int64))),
+                    shape=(n_nodes, n_nodes))
+                #print(matching_matrix_graph)
+                
                 matched_ids = graph.connected_components(matching_matrix_graph)
                 
                 # Defensive check
@@ -2179,18 +2252,16 @@ class single_video_analysis:
 
         mosquito_tracks = self.mosquito_tracks
 
-        # Save sugar feeding and flight activity
-        sugar_all = []
-        hs_all = []
-        left_ctrl_all = []
-        right_ctrl_all = []
+        # Save sugar feeding and flight activity. Each per-frame count is summed as the tracks are
+        # processed (_StreamingNanSum: same result as np.nansum over a list of every track's row,
+        # without keeping all those full-video-length rows in memory -- see its docstring). The
+        # four *_fly_all lists that used to be built here were never read, so they are gone.
+        sugar_all = _StreamingNanSum()
+        hs_all = _StreamingNanSum()
+        left_ctrl_all = _StreamingNanSum()
+        right_ctrl_all = _StreamingNanSum()
 
-        sugar_fly_all = []
-        hs_fly_all = []
-        left_ctrl_fly_all = []
-        right_ctrl_fly_all = []
-
-        fly_all = []
+        fly_all = _StreamingNanSum()
         center_distances_by_t = [[] for _ in np.arange(len(mosquito_tracks.time_stamp))]
 
         #print(files_tracking[video_idx])
@@ -2282,16 +2353,11 @@ class single_video_analysis:
             del right_ctrl_fly[0:5]
             right_ctrl_fly.pop()
 
-            hs_all.append(np.array(hs))
-            sugar_all.append(np.array(sugar))
-            left_ctrl_all.append(np.array(left_ctrl))
-            right_ctrl_all.append(np.array(right_ctrl))
-            fly_all.append(np.array(fly))
-
-            sugar_fly_all.append(np.array(sugar_fly))
-            hs_fly_all.append(np.array(hs_fly))
-            left_ctrl_fly_all.append(np.array(left_ctrl_fly))
-            right_ctrl_fly_all.append(np.array(right_ctrl_fly))
+            hs_all.add(np.array(hs))
+            sugar_all.add(np.array(sugar))
+            left_ctrl_all.add(np.array(left_ctrl))
+            right_ctrl_all.add(np.array(right_ctrl))
+            fly_all.add(np.array(fly))
 
         mean_center_distance_px = []
         r50_center_distance_px = []
@@ -2312,11 +2378,11 @@ class single_video_analysis:
         # print(len(np.nansum(control_all,axis=0)))
         # print(len(np.nansum(sugar_all,axis=0)))
         data = {'time': mosquito_tracks.time_stamp[5:-1],
-                'numb_mosquitos_flying': np.nansum(fly_all,axis=0),
-                'numb_mosquitos_sugar': np.nansum(sugar_all,axis=0),
-                'numb_mosquitos_hs': np.nansum(hs_all,axis=0),
-                'numb_mosquitos_left_ctrl': np.nansum(left_ctrl_all,axis=0),
-            'numb_mosquitos_right_ctrl': np.nansum(right_ctrl_all,axis=0),
+                'numb_mosquitos_flying': fly_all.result(),
+                'numb_mosquitos_sugar': sugar_all.result(),
+                'numb_mosquitos_hs': hs_all.result(),
+                'numb_mosquitos_left_ctrl': left_ctrl_all.result(),
+            'numb_mosquitos_right_ctrl': right_ctrl_all.result(),
             'center_mean_distance_px': mean_center_distance_px,
             'center_r50_px': r50_center_distance_px,
             'center_prop_within_150': prop_within_150
