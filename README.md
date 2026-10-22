@@ -10,7 +10,7 @@ back-end, and one experiment format:
 | Module | What it does |
 |---|---|
 | **Activity** | Tracks flying/resting mosquito activity per cage from raw video (motion-aware Hungarian-assignment tracker with blob splitting for crowded frames). |
-| **BuzzSwarm** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day. The older Sholl/r50 analyses remain available from the CLI. |
+| **BuzzSwarm** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day. The same analysis runs headless with `buzzsuite_cli.py swarm --which clock`; the older Sholl/r50 analyses remain available from the CLI. |
 | **BuzzPhono** | Phonotaxis analysis — speaker-zone resting fraction from a user-drawn polygon zone, comparing stimulus ON vs. OFF windows. |
 
 A bundled **H264 → MP4 Converter** handles the raw-video intake step (lossless remux, with
@@ -104,6 +104,7 @@ buttons call — no separate code path, byte-identical results:
 
 ```bash
 python buzzsuite_cli.py track   --experiment <dir-or-json> --workers 8   # batch-track segments
+python buzzsuite_cli.py swarm   --experiment <exp-dir> --which clock     # clock-time swarm analysis + plots
 python buzzsuite_cli.py swarm   --experiment <exp-dir> --which all       # older Sholl/r50 BuzzSwarm analyses
 python buzzsuite_cli.py phono   --experiment <exp-dir>                   # BuzzPhono analysis
 python buzzsuite_cli.py export  --experiment <exp-dir>                   # tracking → Parquet/CSV

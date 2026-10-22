@@ -5,7 +5,8 @@ Thin command-line wrapper around the *same* callables the GUI buttons invoke, so
 byte-identical to running from the app (no separate code path, no numeric divergence):
 
     track  ->  batch_processing_tab_manager._run_batch_analysis  (multiprocessing.Pool)
-    swarm  ->  buzzswarm.fru2_sholl_csv / fru2_pooled_analysis / fru2_per_trajectory_plots .run()
+    swarm  ->  --which clock: buzzswarm.clock_analysis.run + clock_plots.render_all (Swarming tab)
+               otherwise:     buzzswarm.fru2_sholl_csv / fru2_pooled_analysis / fru2_per_trajectory_plots .run()
     phono  ->  buzzphono.plot_speaker_distance_phonotaxis.run_speaker_distance_analysis()
 
 Intended for the common workflow: set up + initialize experiments in the GUI during the day,
@@ -16,7 +17,10 @@ Examples
 --------
     python buzzsuite_cli.py track --experiment <dir-or-json> --workers 8
     python buzzsuite_cli.py track --experiment <json> --force            # re-track everything
-    python buzzsuite_cli.py swarm --experiment <exp-dir> --which all
+    python buzzsuite_cli.py swarm --experiment <exp-dir> --which all       # the fru2 (ZT) analyses
+    python buzzsuite_cli.py swarm --which clock -e <exp-dir>               # saved / default days
+    python buzzsuite_cli.py swarm --which clock -e <male-dir> <female-dir> --group Male Female \
+        --days 2026-05-25 2026-05-26 --windows 05:00-05:30 16:30-17:00 --mode individual
     python buzzsuite_cli.py phono --experiment <exp-dir>                 # dates auto-derived
     python buzzsuite_cli.py phono --experiment <exp-dir> --resting-only
 
@@ -27,6 +31,12 @@ Notes
   crashes Tk imports).
 * `track` needs an experiment_*.json (paths + settings). `swarm`/`phono` accept either the JSON
   or the experiment directory (they read final_tracking_data/ etc. relative to it).
+* `swarm --which clock` is the Swarming tab's analysis: real clock time, one calendar day at a
+  time. Without --days it takes the days last run in the tab (ld_dd_schedule.json), else every
+  full day not tagged DD; windows default to the schedule's lights-on / midday / lights-off ones.
+  CSVs + day caches go to <exp>/plots/buzzswarm/ (or --out / --cache), figures to its figures/
+  subfolder, or plots/buzzswarm_comparison/<groups>/ when several experiments are compared. It
+  reads the schedule but never writes it.
 * Tracking precondition: a segment is only tracked if its Initialization background image
   images_mortality/<video>.png exists (the tracker silently skips segments without one). `track`
   warns about missing backgrounds up front. Generate them via the GUI's Setup tab
@@ -176,10 +186,35 @@ def cmd_track(args):
 
 
 # ----------------------------------------------------------------- swarm
+_FRU2_ONLY = ('min_flight_frames', 'speed_min', 'speed_max', 'sholl_step')
+_CLOCK_ONLY = ('days', 'windows', 'mode', 'metrics', 'group', 'out', 'cache', 'workers')
+
+
+def _flag(name):
+    return '--' + name.replace('_', '-')
+
+
 def cmd_swarm(args):
-    _, exp_dir = _resolve_experiment(args.experiment, need_json=False)
-    if not os.path.isdir(os.path.join(exp_dir, "final_tracking_data")):
-        raise SystemExit("No final_tracking_data/ in %s — run tracking first." % exp_dir)
+    # run_all_analysis.py calls this with its own Namespace: one experiment as a string and only
+    # the fru2 fields, so missing clock fields read as unset.
+    for name in _FRU2_ONLY + _CLOCK_ONLY + ('bin_minutes',):
+        if not hasattr(args, name):
+            setattr(args, name, None)
+    paths = [args.experiment] if isinstance(args.experiment, str) else args.experiment
+    exp_dirs = []
+    for path in paths:
+        _, exp_dir = _resolve_experiment(path, need_json=False)
+        if not os.path.isdir(os.path.join(exp_dir, "final_tracking_data")):
+            raise SystemExit("No final_tracking_data/ in %s — run tracking first." % exp_dir)
+        exp_dirs.append(exp_dir)
+    wrong = _FRU2_ONLY if args.which == 'clock' else _CLOCK_ONLY
+    given = [_flag(a) for a in wrong if getattr(args, a) is not None]
+    if given:
+        raise SystemExit("%s only appl%s to --which %s." % (
+            ", ".join(given), "ies" if len(given) == 1 else "y",
+            "sholl/pooled/per-traj/all" if args.which == 'clock' else "clock"))
+    if args.which == 'clock':
+        return _swarm_clock(args, exp_dirs)
 
     from buzzswarm import fru2_zt_normalized_analysis as engine
     # Optional engine tunables (same overrides the GUI applies via setattr before a run).
@@ -198,20 +233,122 @@ def cmd_swarm(args):
     t0 = time.time()
     which = args.which
     ran = []
-    if which in ('sholl', 'all'):
-        from buzzswarm import fru2_sholl_csv
-        out = fru2_sholl_csv.run(exp_dir)
-        _log("sholl CSV       -> %s" % out); ran.append(out)
-    if which in ('pooled', 'all'):
-        from buzzswarm import fru2_pooled_analysis
-        out = fru2_pooled_analysis.run(exp_dir)
-        _log("pooled r50      -> %s" % out); ran.append(out)
-    if which in ('per-traj', 'all'):
-        from buzzswarm import fru2_per_trajectory_plots
-        out = fru2_per_trajectory_plots.run(exp_dir)
-        _log("per-trajectory  -> %s" % out); ran.append(out)
+    for exp_dir in exp_dirs:
+        if which in ('sholl', 'all'):
+            from buzzswarm import fru2_sholl_csv
+            out = fru2_sholl_csv.run(exp_dir)
+            _log("sholl CSV       -> %s" % out); ran.append(out)
+        if which in ('pooled', 'all'):
+            from buzzswarm import fru2_pooled_analysis
+            out = fru2_pooled_analysis.run(exp_dir)
+            _log("pooled r50      -> %s" % out); ran.append(out)
+        if which in ('per-traj', 'all'):
+            from buzzswarm import fru2_per_trajectory_plots
+            out = fru2_per_trajectory_plots.run(exp_dir)
+            _log("per-trajectory  -> %s" % out); ran.append(out)
 
     _log("BuzzSwarm done: %d analysis(es)  (%.0fs)" % (len(ran), time.time() - t0))
+    return 0
+
+
+def _swarm_clock(args, exp_dirs):
+    """--which clock: the Swarming tab's Run analysis (clock_analysis.run, then
+    clock_plots.render_all), with the tab's default days, windows, metrics and output folders."""
+    from datetime import datetime
+    import ld_dd
+    from path_utils import get_package_root
+    from buzzswarm import clock_analysis as ca
+    from buzzswarm import clock_plots as cp
+
+    if args.group and len(args.group) != len(exp_dirs):
+        raise SystemExit("--group needs one name per experiment (%d given for %d)."
+                         % (len(args.group), len(exp_dirs)))
+    for d in args.days or []:
+        try:
+            datetime.strptime(d, '%Y-%m-%d')
+        except ValueError:
+            raise SystemExit("--days: %r is not a date (YYYY-MM-DD)." % d)
+    known = [m for m, _label in ca.METRICS]
+    metrics = args.metrics or list(cp.DEFAULT_METRICS)
+    bad = [m for m in metrics if m not in known]
+    if bad:
+        raise SystemExit("Unknown metric(s): %s. Choose from: %s" % (", ".join(bad), ", ".join(known)))
+    bin_minutes = args.bin_minutes if args.bin_minutes is not None else 10
+    if not 1 <= bin_minutes <= 240:
+        raise SystemExit("--bin-minutes must be between 1 and 240.")
+
+    experiments, nights = [], []
+    for i, exp_dir in enumerate(exp_dirs):
+        alias = ca.default_alias(exp_dir)
+        coverage = ca.date_coverage(exp_dir)
+        try:
+            schedule = ld_dd.load_schedule(exp_dir)
+        except Exception as exc:
+            _log("  %s: could not read %s (%s); using the defaults" % (alias, ld_dd.schedule_path(exp_dir), exc))
+            schedule = {}
+        if args.days:
+            days = [d for d in args.days if d in coverage]
+            missing = [d for d in args.days if d not in coverage]
+            if missing:
+                _log("  %s: nothing tracked on %s; skipped" % (alias, ", ".join(missing)))
+        else:
+            days = ca.default_days(coverage, schedule)
+        if not days:
+            _log("  %s: no days to analyse; left out" % alias)
+            continue
+        experiments.append({'folder': exp_dir, 'alias': alias,
+                            'group': args.group[i] if args.group else alias, 'days': days})
+        nights.append((int(schedule.get('night_start_hour', ld_dd.DEFAULT_NIGHT[0])),
+                       int(schedule.get('night_end_hour', ld_dd.DEFAULT_NIGHT[1]))))
+    if not experiments:
+        raise SystemExit("No days to analyse (see above). Pass --days YYYY-MM-DD ...")
+    night = nights[0]
+    if len(set(nights)) > 1:
+        _log("  note: the experiments have different light hours; plots shade the first one's night.")
+
+    windows = []
+    for w in (args.windows or ca.default_windows(*night)):
+        try:
+            label = ca.parse_window(w)[0]
+        except (ValueError, TypeError):
+            raise SystemExit("--windows: %r is not a clock window (HH:MM-HH:MM)." % w)
+        if label not in windows:
+            windows.append(label)
+    windows.sort(key=lambda w: ca.parse_window(w)[1])     # as the tab lists them
+
+    if args.out:
+        fig_dir = os.path.join(args.out, 'figures')
+    elif len(experiments) == 1:
+        fig_dir = os.path.join(ca.experiment_output_dir(experiments[0]['folder']), 'figures')
+    else:
+        fig_dir = cp.comparison_dir(os.path.join(get_package_root(), 'plots'),
+                                    list(dict.fromkeys(e['group'] for e in experiments)))
+
+    for e in experiments:
+        _log("Experiment : %s  [group %s]  days %s" % (e['folder'], e['group'], ", ".join(e['days'])))
+    _log("Windows    : %s | bins %d min | view %s | metrics %s"
+         % (", ".join(windows), bin_minutes, args.mode or 'overlay', ", ".join(metrics)))
+
+    shown = {'t': 0.0, 'head': None}
+
+    def progress(frac, msg):
+        # One line per day step, and a segment line at most every 10 s.
+        head = msg.split(' | segment')[0]
+        now = time.time()
+        if head != shown['head'] or now - shown['t'] >= 10 or frac >= 1:
+            _log("  [%3.0f%%] %s" % (100 * frac, msg))
+            shown.update(t=now, head=head)
+
+    t0 = time.time()
+    tables = ca.run(experiments, bin_minutes, windows, cache_root=args.cache, out_root=args.out,
+                    workers=args.workers, progress=progress)
+    paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night)
+    for e in experiments:
+        _log("CSVs       -> %s" % (os.path.join(args.out, e['alias']) if args.out
+                                   else ca.experiment_output_dir(e['folder'])))
+    _log("Figures    -> %s  (%d plots)" % (fig_dir, len(paths)))
+    _log("BuzzSwarm clock analysis done: %d day(s)  (%.0fs)"
+         % (sum(len(e['days']) for e in experiments), time.time() - t0))
     return 0
 
 
@@ -398,15 +535,38 @@ def build_parser():
     t.set_defaults(func=cmd_track)
 
     # swarm
-    s = sub.add_parser("swarm", help="Run BuzzSwarm (Sholl/r50 aggregation) on an experiment.")
-    s.add_argument("--experiment", "-e", required=True, help="Experiment dir (or its experiment_*.json).")
-    s.add_argument("--which", choices=["sholl", "pooled", "per-traj", "all"], default="all",
-                   help="Which analysis to run (default: all).")
-    s.add_argument("--min-flight-frames", type=int, default=None, help="Engine MIN_FLIGHT_FRAMES (default 50).")
-    s.add_argument("--speed-min", type=float, default=None, help="Engine SPEED_FILTER_MIN px/frame (default 1.0).")
-    s.add_argument("--speed-max", type=float, default=None, help="Engine SPEED_FILTER_MAX px/frame (default 40.0).")
-    s.add_argument("--bin-minutes", type=int, default=None, help="Engine BIN_MINUTES (default 10).")
-    s.add_argument("--sholl-step", type=int, default=None, help="Engine SHOLL_RADIUS_STEP_PX (default 5).")
+    s = sub.add_parser("swarm", help="Run BuzzSwarm (aggregation) on one or more experiments.")
+    s.add_argument("--experiment", "-e", required=True, nargs="+", metavar="EXP",
+                   help="Experiment dir(s) (or their experiment_*.json).")
+    s.add_argument("--which", choices=["clock", "sholl", "pooled", "per-traj", "all"], default="all",
+                   help="clock = the Swarming tab's clock-time analysis + plots; sholl / pooled / "
+                        "per-traj = the fru2 (ZT) analyses; all = the three fru2 ones (default).")
+    s.add_argument("--bin-minutes", type=int, default=None,
+                   help="Time-course bin (default 10); for fru2, the engine's BIN_MINUTES.")
+    clock = s.add_argument_group("--which clock")
+    clock.add_argument("--days", nargs="+", default=None, metavar="YYYY-MM-DD",
+                       help="Days to analyse, for every experiment (default: the days last run in the "
+                            "Swarming tab, else every full day not tagged DD).")
+    clock.add_argument("--windows", nargs="+", default=None, metavar="HH:MM-HH:MM",
+                       help="Clock windows (default: from the light hours, e.g. 05:00-05:30 "
+                            "10:45-11:15 16:30-17:00).")
+    clock.add_argument("--mode", choices=["overlay", "individual", "continuous"], default=None,
+                       help="How the time courses show the days (default: overlay).")
+    clock.add_argument("--metrics", nargs="+", default=None, metavar="NAME",
+                       help="Time-course metrics (default: swarm_mean n_flying shape_index speed_px_s).")
+    clock.add_argument("--group", nargs="+", default=None, metavar="NAME",
+                       help="Group (legend) name per experiment, in order (default: Location_Experiment).")
+    clock.add_argument("--out", default=None, metavar="DIR",
+                       help="CSVs to DIR/<alias>/ and figures to DIR/figures/ (default: <exp>/plots/buzzswarm/).")
+    clock.add_argument("--cache", default=None, metavar="DIR",
+                       help="Day caches in DIR/<alias>/ (default: <exp>/plots/buzzswarm/day_cache/).")
+    clock.add_argument("--workers", type=int, default=None,
+                       help="Processes per day while building a day cache (default: memory-safe auto).")
+    fru2 = s.add_argument_group("fru2 analyses (sholl / pooled / per-traj / all)")
+    fru2.add_argument("--min-flight-frames", type=int, default=None, help="Engine MIN_FLIGHT_FRAMES (default 50).")
+    fru2.add_argument("--speed-min", type=float, default=None, help="Engine SPEED_FILTER_MIN px/frame (default 1.0).")
+    fru2.add_argument("--speed-max", type=float, default=None, help="Engine SPEED_FILTER_MAX px/frame (default 40.0).")
+    fru2.add_argument("--sholl-step", type=int, default=None, help="Engine SHOLL_RADIUS_STEP_PX (default 5).")
     s.set_defaults(func=cmd_swarm)
 
     # phono
