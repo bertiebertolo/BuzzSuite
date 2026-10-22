@@ -26,12 +26,11 @@ line is drawn in.
 Reads each experiment's already-produced analyzed_data.pkl -> population_data (the same file/key
 the data-prep step writes). Picker/recents/preview code is ported from the retired
 compare_tab_manager.py; LD/DD tags persist per experiment in ld_dd_schedule.json (sibling to
-custom_zones.json, same inline-JSON pattern as BuzzPhono). matplotlib/pandas are already a sunk
+custom_zones.json; read/written and shaded via ld_dd.py, shared with the BuzzSwarm tab). matplotlib/pandas are already a sunk
 cold-start cost via common_imports, so importing them at module scope here adds nothing new.
 """
 import os
 import sys
-import json
 import pickle
 import math
 import tkinter as tk
@@ -47,11 +46,12 @@ from path_utils import get_package_root, newest_mtime
 from scrollable_frame import make_scrollable_column
 from image_preview import ImagePreview
 
+import ld_dd
+from ld_dd import shade_day, shade_night, shade_real_span
+
 _GROUP_PALETTE = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                   '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
-_NIGHT_COLOR = '#C8C8C8'
-_NIGHT_ALPHA = 0.30
 _DD_COLOR = '#FF0000'  # Overlay mode: DD lines are always bright red, regardless of group colour.
 
 # Variables that are displacement TOTALS (resample by sum); everything else is an instantaneous
@@ -87,43 +87,6 @@ def _format_recent(entry):
     return alias
 
 
-def _night_spans(night_start, night_end):
-    """(lo, hi) hour spans of the night window on a 0-24h axis. Wraps midnight when
-    night_start > night_end (the usual 17..05 case)."""
-    if night_start > night_end:
-        return [(night_start, 24.0), (0.0, night_end)]
-    return [(night_start, night_end)]
-
-
-def _shade_night(ax, night_start, night_end):
-    """Shade the night window (fixed gray band) on a time-of-day (0-24h) axis."""
-    for lo, hi in _night_spans(night_start, night_end):
-        if lo < hi:
-            ax.axvspan(lo, hi, color=_NIGHT_COLOR, alpha=_NIGHT_ALPHA, linewidth=0, zorder=0)
-
-
-def _shade_panel(ax, entry, tag):
-    """Individual-mode shading for one date's panel: DD has no "day" portion to leave unshaded,
-    so the whole 0-24h panel is shaded; LD shades only the configured night window."""
-    if tag == 'DD':
-        ax.axvspan(0, 24, color=_NIGHT_COLOR, alpha=_NIGHT_ALPHA, linewidth=0, zorder=0)
-    else:
-        _shade_night(ax, entry['night_start'], entry['night_end'])
-
-
-def _shade_real_span(ax, day_start, night_start, night_end, tag):
-    """Continuous-mode shading: same rule as _shade_panel, but positioned at this date's real
-    calendar span instead of a folded 0-24h axis."""
-    if tag == 'DD':
-        ax.axvspan(day_start, day_start + pd.Timedelta(days=1),
-                   color=_NIGHT_COLOR, alpha=_NIGHT_ALPHA, linewidth=0, zorder=0)
-        return
-    for lo, hi in _night_spans(night_start, night_end):
-        if lo < hi:
-            ax.axvspan(day_start + pd.Timedelta(hours=lo), day_start + pd.Timedelta(hours=hi),
-                       color=_NIGHT_COLOR, alpha=_NIGHT_ALPHA, linewidth=0, zorder=0)
-
-
 class ActivityPlotManager:
     def __init__(self, root, ui_manager, state_manager):
         self.root = root
@@ -143,6 +106,7 @@ class ActivityPlotManager:
         self._date_widgets = []   # per-row {date, include_var, tag_var} for the shown experiment
         self.preview = None
         self._last_fig = None
+        self._last_fig_name = None   # (experiment part, variable, mode) of _last_fig, for Save PNG
 
     # ================================================================ UI build
     def init_activity_tab(self, tab: ttk.Frame):
@@ -595,35 +559,18 @@ class ActivityPlotManager:
         self.exp_listbox.selection_set(idx)
         self.status_var.set(f"Saved LD/DD schedule for {e['alias']}.")
 
-    # ---- ld_dd_schedule.json (per experiment, sibling to custom_zones.json) ----
-    @staticmethod
-    def _ld_dd_schedule_path(folder):
-        return os.path.join(folder, "ld_dd_schedule.json")
-
+    # ---- ld_dd_schedule.json (per experiment, shared with BuzzSwarm via ld_dd.py) ----
     def _load_ld_dd_schedule(self, folder):
-        path = self._ld_dd_schedule_path(folder)
-        if not os.path.isfile(path):
-            return {}
         try:
-            with open(path, 'r') as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
+            return ld_dd.load_schedule(folder)
         except Exception as exc:
-            self.log(f"Activity: could not read {path}: {exc}")
+            self.log(f"Activity: could not read {ld_dd.schedule_path(folder)}: {exc}")
             return {}
 
     def _save_ld_dd_schedule(self, entry):
-        payload = {
-            'schema_version': 1,
-            'night_start_hour': int(entry['night_start']),
-            'night_end_hour': int(entry['night_end']),
-            'included_dates': [d for d in entry['dates'] if entry['included'].get(d, True)],
-            'dates': {d: entry['tags'].get(d, 'LD') for d in entry['dates']},
-        }
-        path = self._ld_dd_schedule_path(entry['folder'])
         try:
-            with open(path, 'w') as f:
-                json.dump(payload, f, indent=2)
+            path = ld_dd.save_schedule(entry['folder'], entry['dates'], entry['included'],
+                                       entry['tags'], entry['night_start'], entry['night_end'])
             self.log(f"Activity: saved {path}")
         except Exception as exc:
             self.ui_manager.show_error("Activity plotting", f"Could not save LD/DD schedule:\n{exc}")
@@ -669,9 +616,10 @@ class ActivityPlotManager:
         if resample_min:
             how = 'sum' if variable in _SUM_VARIABLES else 'mean'
             r = series.resample(f"{resample_min}min")
-            series = r.sum() if how == 'sum' else r.mean()
-            series = series.dropna()
-            if series.empty:
+            # Bins with no data stay NaN (min_count=1: not 0 px moved), and are kept rather than
+            # dropped, so the plotted line stops at missing recordings instead of bridging them.
+            series = r.sum(min_count=1) if how == 'sum' else r.mean()
+            if series.dropna().empty:
                 return None, None
         if as_time_of_day:
             x = series.index.hour + series.index.minute / 60.0 + series.index.second / 3600.0
@@ -716,7 +664,7 @@ class ActivityPlotManager:
         for i, (entry, date_str, tag) in enumerate(units):
             ax = flat[i]
             x, y = self._day_series(entry, date_str, variable, resample_min)
-            _shade_panel(ax, entry, tag)
+            shade_day(ax, entry['night_start'], entry['night_end'], tag)
             if x is not None:
                 ax.plot(x, y, color=self._group_color(entry['group']), linewidth=1.4)
                 plotted += 1
@@ -747,7 +695,7 @@ class ActivityPlotManager:
         fig, ax = plt.subplots(figsize=(9, 5.5))
         # single fixed night band (all dates share the 0-24h axis); use the first unit's night hours
         first_entry = units[0][0]
-        _shade_night(ax, first_entry['night_start'], first_entry['night_end'])
+        shade_night(ax, first_entry['night_start'], first_entry['night_end'])
         plotted = 0
         missing = []
         seen_labels = set()
@@ -786,7 +734,7 @@ class ActivityPlotManager:
         included date's real position, independent of which entry's line is being drawn."""
         fig, ax = plt.subplots(figsize=(11, 5.5))
         for entry, date_str, tag in units:
-            _shade_real_span(ax, pd.Timestamp(date_str), entry['night_start'], entry['night_end'], tag)
+            shade_real_span(ax, pd.Timestamp(date_str), entry['night_start'], entry['night_end'], tag)
 
         plotted = 0
         missing = []
@@ -811,6 +759,11 @@ class ActivityPlotManager:
                     if x is None:
                         missing.append((entry['alias'], d))
                         continue
+                    if xs and x[0] - xs[-1] > pd.Timedelta(minutes=resample_min):
+                        # No data between the previous date's last bin and this one (e.g. a date
+                        # holding only a few minutes of recording): break the line there.
+                        xs.append(xs[-1] + pd.Timedelta(minutes=resample_min))
+                        ys.append(float('nan'))
                     xs.extend(x)
                     ys.extend(y)
                 if not xs:
@@ -861,6 +814,14 @@ class ActivityPlotManager:
             os.makedirs(out_dir, exist_ok=True)
         return out_dir
 
+    def _figure_name_parts(self):
+        """(experiment part, variable, mode) for the filename of a figure rendered just now."""
+        if len(self.entries) == 1:
+            name_part = self._sanitize_filename_part(self.entries[0]['alias'])
+        else:
+            name_part = "multi"
+        return name_part, self.variable_var.get() or "activity", self.output_mode_var.get()
+
     def _report_plotted(self, missing, n_total):
         n_plotted = n_total - len(missing)
         msg = f"Plotted {n_plotted} date(s)."
@@ -883,6 +844,7 @@ class ActivityPlotManager:
             if self._last_fig is not None:
                 plt.close(self._last_fig)
             self._last_fig = fig
+            self._last_fig_name = self._figure_name_parts()
             # The preview is a transient scratch image (not a saved deliverable), so it always
             # lives in the package's own plots/ folder regardless of _output_dir_for_current_
             # selection() -- Save PNG (below) is what writes into the experiment's own folder.
@@ -912,13 +874,11 @@ class ActivityPlotManager:
                     return
                 fig, missing = result
                 self._last_fig = fig
+                self._last_fig_name = self._figure_name_parts()
             out_dir = self._output_dir_for_current_selection()
-            variable = self.variable_var.get() or "activity"
-            mode = self.output_mode_var.get()
-            if len(self.entries) == 1:
-                name_part = self._sanitize_filename_part(self.entries[0]['alias'])
-            else:
-                name_part = "multi"
+            # Name the file after the figure being saved (the last preview), not the current
+            # dropdowns -- they may have changed since Plot was clicked.
+            name_part, variable, mode = self._last_fig_name
             import time as _time
             stamp = _time.strftime("%Y%m%d-%H%M")
             initial_name = f"activity_{name_part}_{self._sanitize_filename_part(variable)}_{mode}_{stamp}.png"

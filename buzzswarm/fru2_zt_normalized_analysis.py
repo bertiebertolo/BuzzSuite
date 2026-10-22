@@ -346,6 +346,12 @@ def strict_filter_flights(raw_flights):
     4. Drop trajectories with >= DENSITY_DROP_FRAC of their points in artifact bins.
     Real flight - including male centre hovering - spreads over many bins so its
     per-bin density is moderate; only stuck-pixel patterns trigger the threshold."""
+    return drop_density_artifacts(strict_candidates(raw_flights))
+
+
+def strict_candidates(raw_flights):
+    """Step 1 of strict_filter_flights. Each flight is judged on its own, so this can run one
+    tracking file at a time (buzzswarm/clock_analysis.py streams it that way)."""
     candidates = []
     for fl in raw_flights:
         zts = fl.get('zt_values', [None] * len(fl['coords']))
@@ -366,11 +372,17 @@ def strict_filter_flights(raw_flights):
                 'zt_values': seg_z,
                 'start_frame_abs': fl['start_frame_abs'],
             })
+    return candidates
 
+
+def drop_density_artifacts(candidates):
+    """Steps 2-4 of strict_filter_flights. Needs every candidate of the session at once (the
+    artifact histogram spans all of them). Each candidate's 'coords' may be a list of (x, y)
+    or an (N, 2) array."""
     if not candidates:
         return []
 
-    all_pts = [pt for c in candidates for pt in c['coords']]
+    all_pts = np.concatenate([np.asarray(c['coords'], dtype=float) for c in candidates])
     mask_func, n_artifact = _density_artifact_mask(all_pts)
     if n_artifact == 0:
         return candidates
@@ -686,34 +698,10 @@ def compute_session_bins(session_data):
             r50[b] = np.nan; prop100[b] = np.nan; prop150[b] = np.nan
             n_traj[b] = len(td)
             continue
-        # Build a weighted sample where each point has weight 1/(n_traj * n_pts_in_its_traj)
-        # so total weight per trajectory = 1/n_traj, and total weight = 1.0.
-        nT = len(td)
-        all_d_parts = []
-        all_w_parts = []
-        for d_arr in td:
-            n_pts = len(d_arr)
-            all_d_parts.append(d_arr)
-            all_w_parts.append(np.full(n_pts, 1.0 / (nT * n_pts)))
-        all_d = np.concatenate(all_d_parts)
-        all_w = np.concatenate(all_w_parts)
-        order = np.argsort(all_d)
-        sd = all_d[order]; sw = all_w[order]
-        cumw = np.cumsum(sw)
-        # Solve cumw(R) = 0.5 by linear interpolation between adjacent sorted distances
-        if cumw[-1] < 0.5:
-            r50[b] = np.nan
-        else:
-            idx = int(np.searchsorted(cumw, 0.5))
-            if idx == 0:
-                r50[b] = float(sd[0])
-            else:
-                d0, d1 = sd[idx - 1], sd[idx]
-                c0, c1 = cumw[idx - 1], cumw[idx]
-                r50[b] = float(d0 + (0.5 - c0) / (c1 - c0) * (d1 - d0)) if c1 > c0 else float(d1)
+        r50[b] = weighted_r50(td)
         prop100[b] = float(np.mean(traj_prop100[b]))
         prop150[b] = float(np.mean(traj_prop150[b]))
-        n_traj[b] = nT
+        n_traj[b] = len(td)
 
     upper_edge_s = np.array([total_s - (n_bins - 1 - b) * bin_s for b in range(n_bins)])
     upper_edge_s = np.minimum(upper_edge_s, total_s)
@@ -722,6 +710,33 @@ def compute_session_bins(session_data):
     activity = n_traj / float(BIN_MINUTES)
 
     return lower_edge_s / total_s, upper_edge_s / total_s, r50, prop100, prop150, activity
+
+
+def weighted_r50(traj_dist_arrays):
+    """r50 of a set of trajectories: the radius R at which the AVERAGE per-trajectory fraction
+    of points within R equals 0.5. Each trajectory's points share a total weight of 1/n_traj;
+    cumw(R) = 0.5 is solved by linear interpolation between adjacent sorted distances. NaN if
+    the cumulative weight never reaches 0.5."""
+    nT = len(traj_dist_arrays)
+    all_d_parts = []
+    all_w_parts = []
+    for d_arr in traj_dist_arrays:
+        n_pts = len(d_arr)
+        all_d_parts.append(d_arr)
+        all_w_parts.append(np.full(n_pts, 1.0 / (nT * n_pts)))
+    all_d = np.concatenate(all_d_parts)
+    all_w = np.concatenate(all_w_parts)
+    order = np.argsort(all_d)
+    sd = all_d[order]; sw = all_w[order]
+    cumw = np.cumsum(sw)
+    if cumw[-1] < 0.5:
+        return np.nan
+    idx = int(np.searchsorted(cumw, 0.5))
+    if idx == 0:
+        return float(sd[0])
+    d0, d1 = sd[idx - 1], sd[idx]
+    c0, c1 = cumw[idx - 1], cumw[idx]
+    return float(d0 + (0.5 - c0) / (c1 - c0) * (d1 - d0)) if c1 > c0 else float(d1)
 
 
 # Backwards-compatible alias (if anything still calls it, returns the 4-tuple it expects)
