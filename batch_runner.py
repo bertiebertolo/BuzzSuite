@@ -19,8 +19,9 @@ Frozen numerics: this module only orchestrates workers; it does not change what
 ``_run_batch_analysis`` computes or how ``.pkl`` files are written.
 """
 import os
+import threading
 import time
-from multiprocessing import Pool, TimeoutError as _MPTimeoutError, cpu_count
+from multiprocessing import Pool, TimeoutError as _MPTimeoutError, cpu_count, parent_process
 
 from batch_processing_tab_manager import (_run_batch_analysis, _should_skip_video,
                                           _default_batch_worker_count, pool_concurrency_slot,
@@ -83,6 +84,33 @@ def _pool_workers_busy(pool, min_percent=5.0, sample_seconds=1.0):
     return False
 
 
+def _exit_with_parent():
+    """Pool initializer (runs once in every worker): end this worker as soon as the process that
+    created the Pool is gone.
+
+    Without it, a run whose parent dies (Task Manager / Stop-Process, a crash) leaves its spawned
+    workers running as orphans: each finishes its whole segment with nobody to report to, invisible
+    to every UI, still holding its memory. Seen live 2026-10-14: 12 orphaned workers of a stopped
+    CLI run kept going for 2.5 h, three reached ~20 GB each, and the machine-wide out-of-memory that
+    followed killed 14 segments of an unrelated GUI run (see DEVLOG). ``parent_process().join()``
+    waits on the parent's process handle, so this costs no CPU and is not fooled by PID reuse. It
+    runs in a daemon thread, so the segment itself runs exactly as before. Must never raise: an
+    exception in a Pool initializer kills the worker before it can take any task.
+    """
+    try:
+        parent = parent_process()
+        if parent is None:
+            return
+
+        def _watch():
+            parent.join()
+            os._exit(1)
+
+        threading.Thread(target=_watch, name="exit-with-parent", daemon=True).start()
+    except Exception:
+        pass
+
+
 def resolve_worker_count(requested, n_pending, config=None, concurrency=1):
     """Workers for a tracking run: never more than cpu_count()-1 (no oversubscription), divided by
     ``concurrency`` if other Pool-consuming operations (other dashboard jobs, concatenation, the
@@ -143,7 +171,9 @@ def run_pool(pending, settings_file, folder_videos, folder_analysis, experiment_
     # independent of whether the accumulation's exact source is ever found. The cost is one extra
     # process spawn (re-importing cv2/numpy/etc, a few seconds) per segment, negligible against
     # segments that already take many minutes each.
-    pool = Pool(processes=worker_count, maxtasksperchild=1)
+    # initializer=_exit_with_parent: workers exit if this (parent) process dies, instead of running
+    # on as unsupervised orphans that compete with the next run for memory (see its docstring).
+    pool = Pool(processes=worker_count, maxtasksperchild=1, initializer=_exit_with_parent)
     if on_pool:
         on_pool(pool)
     done = 0

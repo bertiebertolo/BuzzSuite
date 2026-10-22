@@ -1,5 +1,6 @@
 import pickle
 import os
+import re
 import shutil
 import tempfile
 import yaml
@@ -134,6 +135,7 @@ class ExperimentManager:
 
         with open(json_path, 'r') as json_file:
             experiment_details = json.load(json_file)
+        experiment_details = self._rebase_moved_experiment(json_path, experiment_details)
 
         # Load all parts of the experiment details
         self.root_folder_videos = experiment_details.get('root_folder_videos')
@@ -207,6 +209,51 @@ class ExperimentManager:
         if update_ui_func:
             update_ui_func()
 
+
+    @staticmethod
+    def _path_parts(path):
+        return [p for p in re.split(r'[\\/]+', str(path)) if p]
+
+    def _rebase_moved_experiment(self, json_path, details):
+        """The JSON stores absolute paths (e.g. 'G:/Buzzwatch\\Analysis'). When the data drive is
+        mounted somewhere else (another PC, a different drive letter, macOS), re-root them on where
+        the JSON actually is now: <data root>/Analysis/<experiment>/<cage>/<batch>/experiment_*.json.
+        Paths that still exist are left alone, and the JSON on disk is never rewritten."""
+        here = os.path.dirname(os.path.abspath(json_path))
+        names = [details.get('experiment_name'), details.get('cage_name'), details.get('batch_name')]
+        old_root = details.get('root_folder_analysis')
+        if not old_root or not all(names):
+            return details
+        if os.path.isdir(os.path.join(old_root, *names)):
+            return details
+        here_parts = self._path_parts(here)
+        if [p.lower() for p in here_parts[-3:]] != [str(n).lower() for n in names]:
+            return details  # JSON isn't inside its own analysis folder; nothing to infer from
+        new_root = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+        old_data_root = self._path_parts(old_root)[:-1]
+        new_data_root = os.path.dirname(new_root)
+        n = len(old_data_root)
+
+        def rebase(path):
+            parts = self._path_parts(path)
+            if n and len(parts) > n and [p.lower() for p in parts[:n]] == [p.lower() for p in old_data_root]:
+                return os.path.join(new_data_root, *parts[n:])
+            return path
+
+        details = dict(details)
+        details['root_folder_analysis'] = new_root
+        for key in ('root_folder_videos', 'folder_videos', 'settings_file'):
+            value = details.get(key)
+            if value and not os.path.exists(value):
+                details[key] = rebase(value)
+        settings = details.get('settings_file')
+        if settings and not os.path.isfile(settings):
+            local = os.path.join(here, self._path_parts(settings)[-1])
+            if os.path.isfile(local):
+                details['settings_file'] = local
+        self.log(f"Experiment folder moved since it was created: using {new_root} "
+                 f"instead of {old_root}.")
+        return details
 
     def initialize_new_experiment(self, root_folder_videos=None, root_folder_analysis=None,
                                   experiment_name=None, cage_name=None, batch_name=None,settings_file=None,

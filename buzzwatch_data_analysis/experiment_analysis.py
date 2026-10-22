@@ -893,7 +893,7 @@ class buzzwatch_experiment_analysis:
         print("Extracting one image per video")
         create_folder(self.folder_analysis + "individual_images_"+str(BATCH_NB)+"/")
         for k, video_file in enumerate(self.list_videos_files):
-            progress_bar(k, len(self.list_videos_files), bar_length=20)
+            progress_bar(k + 1, len(self.list_videos_files), bar_length=20)  # k+1: last video = 100%
             if video_file.endswith('.mp4'):
                 # Save each frame as a PNG file only if it doesn't exist already
                 frame_filename = video_file.replace('.mp4', '.png')
@@ -917,7 +917,7 @@ class buzzwatch_experiment_analysis:
         print("Extracting one image per video")
         create_folder(self.folder_analysis + "/individual_images/")
         for k, video_file in enumerate(self.list_videos_files):
-            progress_bar(k, len(self.list_videos_files), bar_length=20)
+            progress_bar(k + 1, len(self.list_videos_files), bar_length=20)  # k+1: last video = 100%
             if video_file.endswith('.mp4'):
                 # Save each frame as a PNG file only if it doesn't exist already
                 frame_filename = video_file.replace('.mp4', '.png')
@@ -1012,9 +1012,10 @@ class buzzwatch_experiment_analysis:
             all_names.append(filename[:-4])
 
         for s, image in enumerate(all_images):
+            # Report every image (edge windows included) and count from 1, so the bar reaches 100%.
+            progress_bar(s + 1, len(all_images), bar_length= size_window)
             if  size_window < s < len(all_images) - size_window:
                 video_name = all_names[s]  # You might need to adjust how you get the video name
-                progress_bar(s, len(all_images), bar_length= size_window)
                 self._write_background_references(all_images[s - size_window:s + size_window], video_name, force_to_rerun)
             elif len(all_images) -  size_window <= s < len(all_images):
                 video_name = all_names[s]

@@ -127,6 +127,11 @@ _log_file = None  # set by _setup_logging(); None until then, so early calls jus
 # our own code.
 KNOWN_BAD_SEGMENTS = {
     "CagebimaculataF_20260622_120319_00009",  # Bangkok/Lutzia_F -- mdat overruns file by ~200MB
+    "CageTbambusaM_20260704_120315_00010",  # Cakung/Bambusa_M -- only ~13 real frames (0.5s) of
+    # recoverable video survive; a resync scan of the remaining ~300MB found no further valid AVCC
+    # data. Live run (2026-09-17) confirmed: tracking completes but produces no output file since
+    # there's nothing to track -- exit code 1 every time, not a transient failure. User decision
+    # 2026-09-18: mark permanently failed rather than build a near-useless 13-frame partial.
 }
 
 
