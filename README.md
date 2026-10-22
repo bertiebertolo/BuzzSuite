@@ -10,7 +10,7 @@ back-end, and one experiment format:
 | Module | What it does |
 |---|---|
 | **Activity** | Tracks flying/resting mosquito activity per cage from raw video (motion-aware Hungarian-assignment tracker with blob splitting for crowded frames). |
-| **BuzzSwarm** | Aggregation/swarming analysis — Sholl-style CDFs of flight positions vs. cage centre, keyed on the r50 (median radial distance) metric. |
+| **BuzzSwarm** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day. The older Sholl/r50 analyses remain available from the CLI. |
 | **BuzzPhono** | Phonotaxis analysis — speaker-zone resting fraction from a user-drawn polygon zone, comparing stimulus ON vs. OFF windows. |
 
 A bundled **H264 → MP4 Converter** handles the raw-video intake step (lossless remux, with
@@ -44,6 +44,12 @@ Requires **Python 3.8**. Conda is the primary, tested path:
 conda env create -f environment.yml
 conda activate buzzsuite_env
 ```
+
+`environment.yml` pins the exact versions tracking was validated with. On Windows, run
+`setup_env.bat` from "Anaconda Prompt" instead: it creates the environment, swaps in the PyPI
+numpy/matplotlib wheels (the conda-forge builds crash plotting on PCs with Memory Integrity +
+CET), and runs `check_install.py`, which should end with "All checks passed". Run
+`python check_install.py` again any time to re-check an install.
 
 Or with plain pip (a `.venv` is picked up automatically by `run_buzzsuite.bat` if present):
 
@@ -98,13 +104,18 @@ buttons call — no separate code path, byte-identical results:
 
 ```bash
 python buzzsuite_cli.py track   --experiment <dir-or-json> --workers 8   # batch-track segments
-python buzzsuite_cli.py swarm   --experiment <exp-dir> --which all       # BuzzSwarm analysis
+python buzzsuite_cli.py swarm   --experiment <exp-dir> --which all       # older Sholl/r50 BuzzSwarm analyses
 python buzzsuite_cli.py phono   --experiment <exp-dir>                   # BuzzPhono analysis
 python buzzsuite_cli.py export  --experiment <exp-dir>                   # tracking → Parquet/CSV
 python buzzsuite_cli.py convert --in-dir <raw-video-folder>              # .h264 → .mp4
 ```
 
 Run `python buzzsuite_cli.py <subcommand> --help` for the full flag list.
+
+To prepare and analyse every pending experiment under a data root in one go, run
+`python prepare_experiments.py --root <data-root>` (backgrounds and cage borders), then
+`python run_all_analysis.py --root <data-root>` (tracking, BuzzSwarm, BuzzPhono, export).
+Add `--dry-run` to either to see the plan without changing anything.
 
 ## Project layout
 
@@ -113,10 +124,12 @@ run_gui.py                  ← GUI entry point
 buzzsuite_app.py             ← main Tk application
 buzzsuite_cli.py             ← headless CLI entry point
 path_utils.py                ← cross-platform data-root resolution
+ld_dd.py                     ← light schedule (night hours, LD/DD days) shared by the plot tabs
 experiment_manager.py        ← experiment_{alias}.json + folder structure
 batch_processing_tab_manager.py, *_tab_manager.py   ← per-tab UI + orchestration
 buzzwatch_data_analysis/     ← the tracking engine (see note below)
-buzzswarm/                   ← BuzzSwarm (Sholl/r50) aggregation engine
+buzzswarm/                   ← BuzzSwarm: clock-time swarm analysis (clock_analysis.py) and
+                               its plots (clock_plots.py), plus the older Sholl/r50 scripts
 buzzphono/                   ← BuzzPhono speaker-zone phonotaxis analysis
 h264_converter/               ← H264→MP4 conversion (ffmpeg wrapper)
 docs/                        ← user guide
