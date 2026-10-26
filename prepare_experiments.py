@@ -249,6 +249,8 @@ class QuadDrawer(object):
         self.title = title
         self.existing = [tuple(int(v) for v in p[:2]) for p in (existing or [])]
         self.points = []
+        # Enlarges markers/header text to stay readable when the window shows the image downscaled
+        self.ui_scale = 1.0
 
     def on_click(self, x, y):
         if len(self.points) < 4:
@@ -269,23 +271,28 @@ class QuadDrawer(object):
     def render(self):
         import cv2
         img = self.image.copy()
+        s = self.ui_scale
+
+        def px(v):
+            return max(1, int(round(v * s)))
+
         if len(self.existing) == 4:
             for i in range(4):
-                cv2.line(img, self.existing[i], self.existing[(i + 1) % 4], (0, 165, 255), 1, cv2.LINE_AA)
+                cv2.line(img, self.existing[i], self.existing[(i + 1) % 4], (0, 165, 255), px(1), cv2.LINE_AA)
         for p in self.points:
-            cv2.circle(img, p, 4, (0, 255, 0), -1)
+            cv2.circle(img, p, px(4), (0, 255, 0), -1)
         for a, b in zip(self.points, self.points[1:]):
-            cv2.line(img, a, b, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.line(img, a, b, (0, 255, 0), px(2), cv2.LINE_AA)
         if len(self.points) == 4:
-            cv2.line(img, self.points[3], self.points[0], (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.line(img, self.points[3], self.points[0], (0, 255, 0), px(2), cv2.LINE_AA)
         n = len(self.points)
         hint = ("Enter/Space = save   r = redo   s = skip   q = quit" if n == 4 else
                 "click corner %d of 4   r = redo   s = skip   q = quit" % (n + 1))
         overlay = img.copy()
-        cv2.rectangle(overlay, (0, 0), (img.shape[1], 52), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (0, 0), (img.shape[1], px(52)), (0, 0, 0), -1)
         img = cv2.addWeighted(overlay, 0.6, img, 0.4, 0)
-        cv2.putText(img, self.title, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(img, hint, (8, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, self.title, (px(8), px(20)), cv2.FONT_HERSHEY_SIMPLEX, 0.55 * s, (255, 255, 255), px(1), cv2.LINE_AA)
+        cv2.putText(img, hint, (px(8), px(43)), cv2.FONT_HERSHEY_SIMPLEX, 0.55 * s, (0, 255, 255), px(1), cv2.LINE_AA)
         return img
 
 
@@ -304,8 +311,13 @@ def draw_cage_border(image_path, title, existing=None):
         if event == cv2.EVENT_LBUTTONDOWN:
             drawer.on_click(x, y)
 
-    cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+    from buzzwatch_data_analysis.misc_functions import fit_cv_window_to_screen
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(win, on_mouse)
+    # First imshow before sizing, so the window isn't snapped back to the full image size
+    cv2.imshow(win, drawer.render())
+    scale = fit_cv_window_to_screen(win, image.shape[1], image.shape[0])
+    drawer.ui_scale = 1.0 / scale
     try:
         while True:
             cv2.imshow(win, drawer.render())

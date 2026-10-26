@@ -111,6 +111,37 @@ def get_ids_from_dict(resting_object_traj):
     return list_of_ID_still
 
 
+def _screen_size():
+    """(width, height) of the primary screen: from the running Tk root if there is one (the GUI),
+    else the Win32 API, else a conservative default."""
+    try:
+        import tkinter
+        root = tkinter._default_root
+        if root is not None:
+            return root.winfo_screenwidth(), root.winfo_screenheight()
+    except Exception:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        except Exception:
+            pass
+    return 1280, 720
+
+
+def fit_cv_window_to_screen(window_name, img_w, img_h, max_frac=0.85):
+    """Size a cv2.WINDOW_NORMAL window so an img_w x img_h image fits on screen (never upscaled)
+    and park it at the top-left. Returns the display scale (<= 1.0). Mouse callbacks still get
+    full-resolution image coordinates — OpenCV maps them back for WINDOW_NORMAL windows."""
+    screen_w, screen_h = _screen_size()
+    scale = min(1.0, max_frac * screen_w / float(img_w), max_frac * screen_h / float(img_h))
+    cv2.resizeWindow(window_name, int(img_w * scale), int(img_h * scale))
+    cv2.moveWindow(window_name, 20, 20)
+    return scale
+
+
 def draw_parallelogram(image_path):
     # Load the image
     image = cv2.imread(image_path)
@@ -121,6 +152,8 @@ def draw_parallelogram(image_path):
     # Initialize a list to store the clicked points
     points = []
     points_list = []
+    # Marker sizes, enlarged below once we know how far the window is downscaled
+    marker = {"radius": 3, "thickness": 2}
     
     # Mouse callback function
     def mouse_callback(event, x, y, flags, param):
@@ -130,7 +163,7 @@ def draw_parallelogram(image_path):
             points_list.append([x,y])
             
             # Draw a circle at the clicked point
-            cv2.circle(image_copy, (x, y), 3, (0, 255, 0), -1)
+            cv2.circle(image_copy, (x, y), marker["radius"], (0, 255, 0), -1)
             
             # Display the image with the clicked points
             cv2.imshow("Image", image_copy)
@@ -138,10 +171,11 @@ def draw_parallelogram(image_path):
             # Check if four points have been clicked
             if len(points) == 4:
                 # Draw the parallelogram on the image
-                cv2.line(image_copy, points[0], points[1], (0, 255, 0), 2)
-                cv2.line(image_copy, points[1], points[2], (0, 255, 0), 2)
-                cv2.line(image_copy, points[2], points[3], (0, 255, 0), 2)
-                cv2.line(image_copy, points[3], points[0], (0, 255, 0), 2)
+                t = marker["thickness"]
+                cv2.line(image_copy, points[0], points[1], (0, 255, 0), t)
+                cv2.line(image_copy, points[1], points[2], (0, 255, 0), t)
+                cv2.line(image_copy, points[2], points[3], (0, 255, 0), t)
+                cv2.line(image_copy, points[3], points[0], (0, 255, 0), t)
                 
                 # Display the final image with the parallelogram
                 cv2.imshow("Image", image_copy)
@@ -150,12 +184,16 @@ def draw_parallelogram(image_path):
                 for i, point in enumerate(points):
                     print(f"Point {i+1}: {point}")
     
-    # Create a window and set the mouse callback function
-    cv2.namedWindow("Image")
+    # Create a resizable window and set the mouse callback function
+    cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
     cv2.setMouseCallback("Image", mouse_callback)
     
-    # Display the image
+    # Display the image, then shrink the window to fit the screen (after the first imshow, so
+    # the window isn't snapped back to the image size)
     cv2.imshow("Image", image)
+    scale = fit_cv_window_to_screen("Image", image.shape[1], image.shape[0])
+    marker["radius"] = max(3, int(round(3 / scale)))
+    marker["thickness"] = max(2, int(round(2 / scale)))
     
     # Wait for the user to close the window
     cv2.waitKey(0)
