@@ -494,7 +494,8 @@ def _centroid_from_settings(settings_path):
     cage_pts = settings.get('cage_border_points') if settings else None
     if not cage_pts:
         return None
-    return calculate_cage_centroid(cage_pts)
+    # Floats: the YAML's ints overflow the helper's int32 shoelace sums on Windows for 1080p cages.
+    return calculate_cage_centroid([[float(v) for v in p] for p in cage_pts])
 
 
 def process_session_from_dir(experiment_dir, tracking_dir=None, settings_path=None,

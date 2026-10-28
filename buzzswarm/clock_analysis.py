@@ -238,7 +238,11 @@ def cage_geometry(experiment_dir):
     pts = settings.get('cage_border_points')
     if not pts or len(pts) < 3:
         raise ValueError(f'no cage border drawn for {experiment_dir}')
-    return m.calculate_cage_centroid(pts), np.asarray(pts, dtype=float)
+    polygon = np.asarray(pts, dtype=float)
+    # Float points on purpose: from the YAML's ints the helper builds a platform-int array, int32 on
+    # Windows (numpy 1.x), whose shoelace sums overflow for 1080p cages -- a 1920x1080 cage came out
+    # at (279, -48), outside the cage, instead of (854, 527). Floats give the intended centroid.
+    return m.calculate_cage_centroid(polygon.tolist()), polygon
 
 
 def _area_shares(polygon, centroid, swarm_radius, n=400_000, seed=0):

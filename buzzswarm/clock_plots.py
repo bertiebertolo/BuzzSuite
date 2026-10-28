@@ -520,7 +520,7 @@ def heatmaps(heatmap, geometry=None):
             if g not in grids:
                 ax.text(0.5, 0.5, 'too little flight', ha='center', va='center',
                         transform=ax.transAxes, fontsize=8, color='0.5')
-                ax.set_title(f'{w}  |  {g}', fontsize=9)
+                ax.set_title(f'{w}\n{g}', fontsize=9)
                 continue
             im = ax.imshow(grids[g], origin='upper', extent=[-half, half, half, -half],
                            cmap='magma', vmin=0, vmax=vmax, interpolation='nearest')
@@ -537,10 +537,10 @@ def heatmaps(heatmap, geometry=None):
                 ax.plot(rz * np.cos(t), rz * np.sin(t), color='c', lw=0.8, ls='--')
             ax.set_xlim(-half, half)
             ax.set_ylim(half, -half)
-            ax.set_title(f'{w}  |  {g}', fontsize=9)
+            ax.set_title(f'{w}\n{g}', fontsize=9)
         if im is not None:
             fig.colorbar(im, ax=list(axes[ri, :]), shrink=0.85, label='Share of real flight per cell')
-    fig.suptitle('Where the real flight is (seen from below; cyan = swarm zone, white = cage border)',
+    fig.suptitle('Where the real flight is (seen from below;\ncyan = swarm zone, white = cage border)',
                  fontsize=10)
     return fig, (pd.concat(rows, ignore_index=True) if rows else None)
 

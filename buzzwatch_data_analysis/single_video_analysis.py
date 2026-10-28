@@ -81,6 +81,33 @@ _TRACKING_FLAG_DEFAULTS = {
 _REST_STD_SCALE = 4.0
 
 
+def _read_cached_gray(path):
+    """A cached image as grayscale, or None when it can't be decoded. A run killed while writing
+    the cache leaves a truncated PNG, which cv2.imread returns as None; the caller then rebuilds it
+    instead of crashing on every later run. Readable caches load exactly as before."""
+    img = cv2.imread(path)
+    if img is None:
+        print("Cached image " + path + " is unreadable (truncated by an interrupted run?); rebuilding it")
+        return None
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+def _imwrite_atomic(path, img):
+    """cv2.imwrite through a temp file + os.replace, so an interrupted run never leaves a
+    half-written cache image behind. Same encoder and pixels as cv2.imwrite(path, img)."""
+    ok, buf = cv2.imencode(os.path.splitext(path)[1], img)
+    if not ok:
+        raise IOError("could not encode " + path)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(buf.tobytes())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def tracking_flag(settings, key):
     """Read a tracking-overhaul feature flag, falling back to the original-behaviour default."""
     default = _TRACKING_FLAG_DEFAULTS.get(key)
@@ -713,10 +740,12 @@ class single_video_analysis:
 
         ref = None
         if os.path.isfile(rest_path):
-            ref = cv2.cvtColor(cv2.imread(rest_path), cv2.COLOR_BGR2GRAY)
+            ref = _read_cached_gray(rest_path)
         std = None
         if need_std and os.path.isfile(std_path):
-            std = cv2.cvtColor(cv2.imread(std_path), cv2.COLOR_BGR2GRAY).astype(np.float32) / _REST_STD_SCALE
+            std = _read_cached_gray(std_path)
+            if std is not None:
+                std = std.astype(np.float32) / _REST_STD_SCALE
 
         need_ref_build = ref is None
         need_std_build = need_std and std is None
@@ -746,7 +775,7 @@ class single_video_analysis:
         if need_ref_build:
             ref = np.percentile(stack, pct, axis=0).astype(np.uint8)
             try:
-                cv2.imwrite(rest_path, ref)
+                _imwrite_atomic(rest_path, ref)
             except Exception:
                 pass
             print("Built within-video resting reference (p%d over %d frames) for %s" % (pct, len(frames), self.video_name))
@@ -768,7 +797,7 @@ class single_video_analysis:
             mean_up = (stack * mask).sum(axis=0) / cnt
             std = np.sqrt((((stack - mean_up) ** 2) * mask).sum(axis=0) / cnt)
             try:
-                cv2.imwrite(std_path, np.clip(std * _REST_STD_SCALE, 0, 255).astype(np.uint8))
+                _imwrite_atomic(std_path, np.clip(std * _REST_STD_SCALE, 0, 255).astype(np.uint8))
             except Exception:
                 pass
             print("Built within-video resting BRIGHT-frame std map over %d frames for %s" % (len(frames), self.video_name))

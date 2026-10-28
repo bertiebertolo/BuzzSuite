@@ -97,6 +97,21 @@ def _should_skip_video(video_name, folder_analysis):
     return os.path.exists(_tracking_output_path(folder_analysis, video_name))
 
 
+def _log_segment_failure(folder_analysis, video_name, error_details):
+    """Append a failed segment's error to its own log_analysis/<video>.log. The error otherwise only
+    reaches the GUI/CLI output, and the log just stops mid-step with no reason given."""
+    log_dir = os.path.join(folder_analysis or '', "log_analysis")
+    if not os.path.isdir(log_dir):
+        return
+    try:
+        import datetime
+        stamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]
+        with open(os.path.join(log_dir, video_name + ".log"), "a") as f:
+            f.write("%s - FAILED: %s\n" % (stamp, error_details.rstrip()))
+    except Exception:
+        pass
+
+
 # Segments the user chose to Skip in the app. Kept in their own small file (not the experiment JSON,
 # which ExperimentManager rewrites from its own fields and would silently drop an extra key).
 # Skipped segments are never tracked and are simply absent from analyzed_data.pkl, which is built
@@ -2361,4 +2376,5 @@ def _run_batch_analysis(args):
     except Exception as e:
         import traceback
         error_details = f"{str(e)}\n{traceback.format_exc()}"
+        _log_segment_failure(folder_analysis, video_name, error_details)
         return {'ok': False, 'video_name': video_name, 'error': error_details}
