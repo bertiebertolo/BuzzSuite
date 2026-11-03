@@ -122,6 +122,8 @@ python_version = "3.10"
 files = ["src/buzzphono"]
 strict = true
 warn_unreachable = true
+# numpy and pandas stubs return Any from most arithmetic, so this check is noise for numeric code.
+warn_return_any = false
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]

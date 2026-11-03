@@ -36,12 +36,31 @@ def _local_paths() -> dict[str, str]:
     return {}
 
 
+def local_setting(key: str) -> str | None:
+    """A machine-specific test setting: env var BUZZPHONO_<KEY>, else the local paths file."""
+    return os.environ.get("BUZZPHONO_" + key.upper()) or _local_paths().get(key)
+
+
 def real_data_path(key: str) -> Path | None:
-    """Folder for a real-data test, from env var BUZZPHONO_<KEY> or the local paths file; None if absent."""
-    value = os.environ.get("BUZZPHONO_" + key.upper()) or _local_paths().get(key)
+    """Folder for a real-data test, or None when it is not available on this machine."""
+    value = local_setting(key)
     if value and Path(value).exists():
         return Path(value)
     return None
+
+
+@pytest.fixture(scope="session")
+def real_data():
+    """``real_data(key)`` -> Path or None (session-scoped, for module-scoped real-data fixtures)."""
+    return real_data_path
+
+
+@pytest.fixture(scope="session")
+def golden_cache(tmp_path_factory) -> Path:
+    """Where real-data tests keep their BuzzPhono cache: a fixed local folder if configured
+    (so repeated runs reuse it), else a temporary one."""
+    value = local_setting("golden_cache")
+    return Path(value) if value else tmp_path_factory.mktemp("golden_cache")
 
 
 @pytest.fixture
