@@ -1,0 +1,22 @@
+# buzzphono_env: the environment BuzzPhono (src/buzzphono) runs in. It is separate from
+# buzzsuite_env, which stays frozen for the tracker (Python 3.8).
+#
+# Create it from this folder (Anaconda Prompt on Windows, a terminal on macOS/Linux):
+#     conda env create -f environment-buzzphono.yml
+# then check it with:
+#     conda activate buzzphono_env
+#     buzzphono demo
+#
+# Everything except Python itself comes from PyPI wheels (pinned in constraints-buzzphono.txt).
+# The conda-forge numpy/matplotlib builds crash on some Windows PCs (Memory Integrity + CET);
+# the PyPI wheels do not. BuzzPhono is installed "editable" from this folder: if you move the
+# BuzzSuite folder, run `pip install -e .[app]` again from its new location.
+name: buzzphono_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -c constraints-buzzphono.txt
+      - -e .[app,dev]

@@ -7,7 +7,8 @@ byte-identical to running from the app (no separate code path, no numeric diverg
     track  ->  batch_processing_tab_manager._run_batch_analysis  (multiprocessing.Pool)
     swarm  ->  --which clock: buzzswarm.clock_analysis.run + clock_plots.render_all (Swarming tab)
                otherwise:     buzzswarm.fru2_sholl_csv / fru2_pooled_analysis / fru2_per_trajectory_plots .run()
-    phono  ->  buzzphono.plot_speaker_distance_phonotaxis.run_speaker_distance_analysis()
+    phono  ->  buzzphono_legacy.plot_speaker_distance_phonotaxis.run_speaker_distance_analysis()
+    phono-flight -> buzzphono_legacy.flight_phonotaxis.run_flight_phonotaxis (BuzzPhono tab, "Flight phonotaxis")
 
 Intended for the common workflow: set up + initialize experiments in the GUI during the day,
 then run the heavy tracking/analysis unattended (SSH, nohup, tmux, cron) without a display.
@@ -23,6 +24,7 @@ Examples
         --days 2026-05-25 2026-05-26 --windows 05:00-05:30 16:30-17:00 --mode individual
     python buzzsuite_cli.py phono --experiment <exp-dir>                 # dates auto-derived
     python buzzsuite_cli.py phono --experiment <exp-dir> --resting-only
+    python buzzsuite_cli.py phono-flight <exp-dir> --workers 6           # flight-based phonotaxis
 
 Notes
 -----
@@ -367,7 +369,7 @@ def cmd_phono(args):
         raise SystemExit("No custom_zones.json at %s — define the speaker zone first "
                          "(GUI BuzzPhono tab, or the Step-4 zone editor)." % zones)
 
-    from buzzphono import plot_speaker_distance_phonotaxis as ph
+    from buzzphono_legacy import plot_speaker_distance_phonotaxis as ph
     ph.STIM_START_MIN, ph.STIM_END_MIN = args.on_start, args.on_end
     ph.OFF_START_MIN, ph.OFF_END_MIN = args.off_start, args.off_end
 
@@ -379,6 +381,34 @@ def cmd_phono(args):
         exp_dir, start=start, end=end, custom_zones_path=zones,
         resting_only=args.resting_only, force_replot=args.force)
     _log("BuzzPhono done -> %s  (%.0fs)" % (out, time.time() - t0))
+    return 0
+
+
+# ----------------------------------------------------------------- phono-flight
+def cmd_phono_flight(args):
+    _, exp_dir = _resolve_experiment(args.experiment, need_json=False)
+    from buzzphono_legacy.flight_phonotaxis import FlightPhonotaxisError, run_flight_phonotaxis
+    last = [-1.0]
+
+    def progress(frac, msg):
+        if frac - last[0] >= 0.05 or frac >= 1.0:
+            last[0] = frac
+            _log("  %3.0f%%  %s" % (100 * frac, msg))
+    _log("Experiment : %s" % exp_dir)
+    t0 = time.time()
+    try:
+        r = run_flight_phonotaxis(
+            exp_dir, zones_file=args.zones, out_dir=args.out, start=args.start, end=args.end,
+            on=(args.on_start, args.on_end), off=(args.off_start, args.off_end),
+            light_hours=(args.light_start, args.light_end), flyer_mult=args.flyer_mult, min_median=args.min_median,
+            radius=args.radius, workers=args.workers, progress=progress, log=_log)
+    except FlightPhonotaxisError as exc:
+        raise SystemExit(str(exc))
+    ck = r["clock"]
+    _log("Cycles     : %d (%d light, %d dark); clock %s" % (
+        r["n_cycles"], r["n_cycles_light"], r["n_cycles_dark"],
+        "calibrated, drift %.1f s/day" % ck["b"] if ck["fitted"] else "not enough bursts, using the nominal clock"))
+    _log("Flight phonotaxis done -> %s  (%.0fs)" % (r["out_dir"], time.time() - t0))
     return 0
 
 
@@ -523,7 +553,7 @@ def build_parser():
         description="BuzzSuite headless batch runner (track / swarm / phono) — reuses the GUI callables.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Run with the conda env python. See the module docstring for examples.")
-    sub = p.add_subparsers(dest="command", metavar="{track,swarm,phono,export,convert}")
+    sub = p.add_subparsers(dest="command", metavar="{track,swarm,phono,phono-flight,export,convert}")
     sub.required = True
 
     # track
@@ -584,6 +614,30 @@ def build_parser():
     ph.add_argument("--force", action="store_true", help="Regenerate even if outputs are newer than tracking data.")
     ph.set_defaults(func=cmd_phono)
 
+    # phono-flight
+    pf = sub.add_parser("phono-flight", help="Flight-based phonotaxis (arousal; speaker wall vs the other walls).")
+    pf.add_argument("experiment", help="Experiment dir (or its experiment_*.json).")
+    pf.add_argument("--zones", default=None,
+                    help="Zones JSON with 'speaker' + 3 control zones (default: <exp>/custom_zones.json, else "
+                         "<exp>/plots/flight_phonotaxis/custom_zones_flight.json).")
+    pf.add_argument("--start", default=None, help="Analysis start, e.g. 2026-10-11 (default: all recorded data).")
+    pf.add_argument("--end", default=None, help="Analysis end, exclusive (default: all recorded data).")
+    pf.add_argument("--on-start", type=int, default=40, help="Tone ON start minute (default 40).")
+    pf.add_argument("--on-end", type=int, default=50, help="Tone ON end minute (default 50).")
+    pf.add_argument("--off-start", type=int, default=28, help="OFF baseline start minute (default 28).")
+    pf.add_argument("--off-end", type=int, default=38, help="OFF baseline end minute (default 38).")
+    pf.add_argument("--light-start", type=int, default=5, help="Lights-on hour (default 5).")
+    pf.add_argument("--light-end", type=int, default=17, help="Lights-off hour (default 17).")
+    pf.add_argument("--flyer-mult", type=float, default=1.0,
+                    help="Flyer-threshold multiplier (default 1.0; other values go to flyer_x<value>/).")
+    pf.add_argument("--min-median", type=float, default=0.0,
+                    help="Minimum sustained movement: median step >= this x camera scale px/frame (0 = off, "
+                         "default; 3 for dense cages such as Bangkok). Output goes to flyer_med<value>/.")
+    pf.add_argument("--radius", type=float, default=0.1, help="Neighbourhood radius in cage widths (default 0.1).")
+    pf.add_argument("--workers", "-w", type=int, default=None, help="Worker processes (default: cores-2, max 8).")
+    pf.add_argument("--out", default=None, help="Output folder (default: <exp>/plots/flight_phonotaxis/).")
+    pf.set_defaults(func=cmd_phono_flight)
+
     # export
     ex = sub.add_parser("export", help="Export frozen tracking .pkls to Parquet + CSV (human/ML readable).")
     ex.add_argument("--experiment", "-e", required=True, help="Experiment dir (or its experiment_*.json).")
@@ -610,6 +664,7 @@ def build_parser():
                         "instead of skipping it (unattended equivalent of the GUI's confirmation dialog).")
     c.add_argument("--dry-run", action="store_true", help="Print the job list/counts without converting anything.")
     c.set_defaults(func=cmd_convert)
+
     return p
 
 

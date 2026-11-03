@@ -4,7 +4,7 @@ Wires the refactored custom-zones phonotaxis analysis into the shared app. Like 
 tab now has its own multi-experiment picker (add several already-tracked experiments, compare
 across them) — ported from ``activity_plot_manager.py``'s picker. "Run BuzzPhono analysis" loops
 over every added experiment, calling the unchanged, per-experiment
-``buzzphono/plot_speaker_distance_phonotaxis.run_speaker_distance_analysis(...)`` for each (full
+``buzzphono_legacy/plot_speaker_distance_phonotaxis.run_speaker_distance_analysis(...)`` for each (full
 existing output, unaffected), then produces one new combined plot via
 ``run_multi_speaker_comparison(...)`` overlaying every experiment's speaker-response profile.
 Per-experiment outputs stay in that experiment's own ``plots/custom_zones/``; the combined plot
@@ -36,6 +36,7 @@ from tooltip import add_tooltip
 from path_utils import get_package_root
 from scrollable_frame import make_scrollable_column
 from image_preview import ImagePreview
+from buzzphono_flight_section import FlightPhonotaxisSection
 
 _TS_RE = re.compile(r'_(\d{8})_(\d{6})_')   # _{YYYYMMDD}_{HHMMSS}_ in segment filenames
 
@@ -177,10 +178,17 @@ class BuzzphonoTabManager:
         tk.Label(controls, textvariable=self.status_var, fg="blue",
                  wraplength=280, justify="left").pack(side=tk.TOP, anchor="w", pady=(8, 0))
 
-        preview = tk.Frame(tab)
-        preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Flight phonotaxis (buzzphono_flight_section.py): its own controls + a results sub-tab.
+        self.flight_section = FlightPhonotaxisSection(self)
+        self.flight_section.build_controls(controls)
+
+        right = ttk.Notebook(tab)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        preview = tk.Frame(right)
+        right.add(preview, text="Plot preview")
         self.preview = ImagePreview(preview, placeholder="Add experiments, then Run BuzzPhono analysis.",
                                     log=lambda msg: self.log(f"BuzzPhono: {msg}"))
+        self.flight_section.build_results(right)
 
     # ---------------------------------------------------------------- picker/list
     def _refresh_recents(self):
@@ -713,7 +721,7 @@ class BuzzphonoTabManager:
 
         def worker():
             try:
-                from buzzphono import plot_speaker_distance_phonotaxis as ph
+                from buzzphono_legacy import plot_speaker_distance_phonotaxis as ph
                 # Apply the ON/OFF window overrides onto the module globals the analysis reads.
                 ph.STIM_START_MIN = on_start
                 ph.STIM_END_MIN = on_end

@@ -1,0 +1,135 @@
+# Packaging for BuzzPhono, the phonotaxis-analysis module of BuzzSuite.
+#
+# Only the `buzzphono` package (src/buzzphono) is installable; the rest of BuzzSuite is the Tk app,
+# which runs from this folder in its own frozen environment (buzzsuite_env, Python 3.8).
+# BuzzPhono runs in buzzphono_env (Python 3.10+): see environment-buzzphono.yml and
+# docs/BUZZPHONO_GUIDE.md.
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buzzphono"
+dynamic = ["version"]
+description = "Phonotaxis analysis of BuzzWatch mosquito tracking: speaker-zone resting fraction, flight responses and more."
+readme = "src/buzzphono/README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Alberto Thornton" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.12",
+    "statsmodels>=0.14.2",
+    "matplotlib>=3.8",
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+    "pillow>=10.0",
+    "opencv-python-headless>=4.9",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+app = [
+    "streamlit>=1.40",
+    "plotly>=5.24",
+    "streamlit-image-coordinates>=0.1.9",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "hypothesis>=6.100",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pandas-stubs>=2.2",
+    "types-PyYAML>=6.0",
+    "playwright>=1.45",
+]
+
+[project.scripts]
+buzzphono = "buzzphono.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "buzzphono.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["buzzphono*"]
+
+[tool.setuptools.package-data]
+buzzphono = ["py.typed", "README.md", "CLAUDE.md", "app/*.py", "app/pages/*.py", "app/.streamlit/*.toml"]
+
+# ------------------------------------------------------------------ pytest
+[tool.pytest.ini_options]
+testpaths = ["tests/buzzphono"]
+addopts = "-ra --import-mode=importlib --strict-markers"
+markers = [
+    "slow: long statistical / end-to-end runs (weekly CI job and local full suite)",
+    "golden: reproduces the published thesis numbers from real data on this PC (skipped when the data is absent)",
+    "realdata: reads real experiments from the data drive (skipped when absent)",
+    "e2e: end-to-end CLI or app runs",
+    "browser: drives a real browser with Playwright (local; Chrome or Edge channel)",
+]
+timeout = 900
+
+# ------------------------------------------------------------------ coverage
+[tool.coverage.run]
+source = ["buzzphono"]
+branch = true
+omit = ["*/buzzphono/app/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+# ------------------------------------------------------------------ ruff
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+include = ["src/buzzphono/**/*.py", "tests/buzzphono/**/*.py", "tools/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "NPY", "PD", "C4", "PIE", "RET"]
+ignore = [
+    "RET504",  # naming a value before returning it often reads better
+    "RUF001",  # ambiguous unicode in strings: we deliberately print Δ, ±, ×, –
+    "RUF002",
+    "RUF003",
+    "SIM108",  # ternaries are not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["PTH", "PD", "B011"]
+"tools/pi_collect_logs.py" = ["UP", "PTH"]   # must run on the Pi's Python 3.9 with stdlib only
+
+# ------------------------------------------------------------------ mypy
+[tool.mypy]
+python_version = "3.10"
+files = ["src/buzzphono"]
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["buzzphono.app.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+module = ["statsmodels.*", "scipy.*", "cv2.*", "plotly.*", "streamlit_image_coordinates.*", "matplotlib.*"]
+ignore_missing_imports = true
