@@ -653,10 +653,11 @@ def _flight(ctx: _Ctx) -> None:
         radius=f.radius_cage_widths,
         min_median=f.min_median,
     )
-    if len(ctx.controls) != 3:
+    walls = [z.name for z in ctx.cal.zones if z.role != "speaker"]
+    if len(walls) != 3:
         ctx.res.warnings.append(
-            "flight analysis skipped: it needs exactly three control zones (one per wall), "
-            f"found {len(ctx.controls)}"
+            "flight analysis skipped: it needs the speaker zone plus exactly three other zones, one per "
+            f"wall (found {len(walls)}: {', '.join(walls) or 'none'})"
         )
         return
     res = run_flight(

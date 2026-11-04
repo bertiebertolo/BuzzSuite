@@ -304,9 +304,11 @@ In short:
 - **Two-sided by default.** Use `stats.alternative: greater` only if the direction was fixed
   before seeing the data.
 
-With few cage-days (say 2–4), the wild cluster bootstrap cannot give very small p-values: its
-smallest possible value is limited by the number of cage-days. That is honest, not a defect.
-Report the interval and the effect size, and plan more cage-days with the reliability table.
+With fewer than 6 cage-days the wild bootstrap's interval is too narrow. BuzzPhono then uses a
+t-test on the cage-day means instead (G − 1 degrees of freedom) and names it in the `method`
+column. Its intervals are wide and its p-values modest, because a two-day recording of one cage
+holds only two independent units. That is honest, not a defect. Report the interval and the
+effect size, and plan more cage-days with the reliability table.
 
 Every statistics table includes the assumptions of each test, and the report repeats them.
 

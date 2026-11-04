@@ -34,13 +34,40 @@ from buzzphono.stats import benjamini_hochberg
 MM_PER_PX_UNCALIBRATED = 0.4  # 5 px/s ≈ 2 mm/s when the cage size is unknown
 
 
-def grown_zone(polygon: np.ndarray, margin_px: float) -> ZoneTest:
+class _ZoneDistances:
+    """Signed distance to one polygon, shared by all its grown/shrunk variants.
+
+    Every variant asks about the same array of positions in turn, so the distances are computed once
+    per array. Points farther than ``reach`` outside the polygon's bounding box cannot be within any
+    margin and get +inf without the (costly) exact distance.
+    """
+
+    def __init__(self, polygon: np.ndarray, reach: float) -> None:
+        self.polygon = polygon
+        self.lo = polygon.min(axis=0) - reach
+        self.hi = polygon.max(axis=0) + reach
+        self._xy: np.ndarray | None = None  # held, so its identity cannot be reused by a new array
+        self._value = np.empty(0)
+
+    def __call__(self, xy: np.ndarray) -> np.ndarray:
+        if xy is not self._xy:
+            pts = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+            out = np.full(len(pts), np.inf)
+            near = np.all((pts >= self.lo) & (pts <= self.hi), axis=1)
+            if near.any():
+                out[near] = signed_distance(self.polygon, pts[near])
+            self._xy, self._value = xy, out
+        return self._value
+
+
+def grown_zone(polygon: np.ndarray, margin_px: float, distances: _ZoneDistances | None = None) -> ZoneTest:
     """The zone grown (``margin_px`` > 0) or shrunk (< 0); 0 returns the polygon itself."""
     if margin_px == 0:
         return polygon
+    dist = distances or _ZoneDistances(polygon, abs(margin_px) + 1.0)
 
     def inside(xy: np.ndarray) -> np.ndarray:
-        return signed_distance(polygon, xy) <= margin_px
+        return dist(xy) <= margin_px
 
     return inside
 
@@ -108,10 +135,11 @@ def run_sensitivity(
     kw: dict[str, Any] = {"fps": fps, "cage": cage_label, "phases": phases, "coverage": coverage}
 
     zones: dict[str, ZoneTest] = {"speaker": speaker}
+    shared = _ZoneDistances(speaker, max([abs(m) for m in plan.margins_px], default=0.0) + 1.0)
     meta: dict[str, tuple[str, str, float]] = {}  # zone -> (family, label, px)
     for m in plan.margins_px:
         name = f"margin_{m:+g}px"
-        zones[name] = grown_zone(speaker, m)
+        zones[name] = grown_zone(speaker, m, shared)
         meta[name] = ("zone margin", f"{m:+g} px", m)
     for s in plan.shifts_px:
         name = f"shift_{s:+g}px"
@@ -133,10 +161,19 @@ def run_sensitivity(
 
     def binned(eclock: ExperimentClock, zs: Mapping[str, ZoneTest], **extra: Any) -> pd.DataFrame:
         b = bin_experiment(
-            layout, cache_dir, eclock, zs, cage=None, with_moving=False, cancel=cancel, **extra
+            layout,
+            cache_dir,
+            eclock,
+            zs,
+            cage=None,
+            with_moving=False,
+            cancel=cancel,
+            arrays_cache=loaded,
+            **extra,
         )
         return cycle_table(b, windows, **kw)
 
+    loaded: dict[str, dict[str, np.ndarray]] = {}  # resting arrays, read once for every pass
     base = binned(base_clock, zones, colony=colony, zone_areas=areas)
     tick("zone variants")
     keep = base.loc[usable(base, ("on", "off")), "cycle_start_ns"]

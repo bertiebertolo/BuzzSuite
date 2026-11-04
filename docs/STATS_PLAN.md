@@ -143,3 +143,22 @@ hours are correlated.
   - At ρ = 0.3: 4 h 0.057, 12 h 0.043.
   - For comparison at ρ = 0.6: the wild cluster bootstrap gave 0.057 and the per-cycle Wilcoxon
     test 0.29.
+- **2026-11-04 (later): fewer than 6 cage-days → t-test on cage-day means.**
+  - **How it surfaced:** the first real-data runs had 2–3 cage-days per cage. Their wild cluster
+    intervals looked implausibly narrow, which prompted a coverage check on simulated data. The
+    change is a property of the method, not of any result: the simulator was the only evidence
+    used.
+  - **Coverage of the 95% interval** (`synthetic.l1`, one cage, ρ = 0.3, 300 seeds):
+
+    | Cage-days | Wild cluster bootstrap-t | t-test on cage-day means (G − 1 df) |
+    |---|---|---|
+    | 2 | degenerate (unbounded width) | 0.95 |
+    | 3 | 0.91 | 0.94 |
+    | 4 | 0.92 | 0.95 |
+    | 6 | 0.95 | 0.95 |
+    | 10 | 0.96 | 0.97 |
+  - **The change:** below 6 cage-days, `wild_cluster_bootstrap` returns the t-test on cage-day
+    means instead, with the method named in the output. The primary cluster-robust result
+    therefore stays honest for short single-cage experiments. At 6 or more cage-days nothing
+    changes.
+  - **Regression test:** `tests/buzzphono/stats/test_stats_methods.py::test_few_cage_days_use_the_cluster_means_t_interval`.

@@ -155,3 +155,20 @@ def test_summarise_paired_runs_everything() -> None:
         s
     )
     assert s["wild_cluster"].n_clusters == 6
+
+
+def test_few_cage_days_use_the_cluster_means_t_interval() -> None:
+    """With < 6 cage-days the wild bootstrap interval under-covers; the t-test on cage-day means does not."""
+    from buzzphono.stats import MIN_WILD_CLUSTERS, wild_cluster_bootstrap
+    from buzzphono.synthetic.l1 import L1Design, simulate_cycles
+
+    covered = 0
+    reps = 200
+    for s in range(reps):
+        df = simulate_cycles(L1Design(n_cages=1, n_days=3, sd_cage_day=0.02, rho=0.3), seed=5000 + s)
+        d = (df["on"] - df["off"]).to_numpy()
+        r = wild_cluster_bootstrap(d, df["cage_day"].to_numpy(), n_resamples=199)
+        covered += r.ci_low <= df["true_effect"].mean() <= r.ci_high
+    assert covered / reps >= 0.92
+    assert r.method.startswith("t-test on cage-day means") and r.n_clusters == 3 < MIN_WILD_CLUSTERS
+    assert "cage-days" in r.warnings[0]

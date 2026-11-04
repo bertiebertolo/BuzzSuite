@@ -358,6 +358,40 @@ def _cr1_se(cluster_resid_sums: np.ndarray, n: int, g: int) -> np.ndarray:
     return np.sqrt(g / (g - 1) * np.sum(cluster_resid_sums**2, axis=-1)) / n
 
 
+MIN_WILD_CLUSTERS = 6  # below this the wild bootstrap interval under-covers (docs/STATS_PLAN.md, Changes)
+
+
+def _cluster_means_t(
+    d: np.ndarray, inv: np.ndarray, g: int, level: float, alternative: Alternative
+) -> ClusterBootstrapResult:
+    """One-sample t-test on the cluster means (g − 1 degrees of freedom): exact coverage with few
+    clusters when the cluster means are roughly normal. Used instead of the wild bootstrap below
+    :data:`MIN_WILD_CLUSTERS` clusters."""
+    from scipy import stats as sps
+
+    means = np.bincount(inv, weights=d, minlength=g) / np.bincount(inv, minlength=g)
+    m = float(means.mean())
+    se = float(means.std(ddof=1) / np.sqrt(g))
+    q = float(sps.t.ppf(1 - (1 - level) / 2, g - 1))
+    if se > 0:
+        tstat = m / se
+        if alternative == "two-sided":
+            p = float(2 * sps.t.sf(abs(tstat), g - 1))
+        elif alternative == "greater":
+            p = float(sps.t.sf(tstat, g - 1))
+        else:
+            p = float(sps.t.cdf(tstat, g - 1))
+    else:
+        p = float("nan")
+    note = (
+        f"only {g} cage-days: t-test on the {g} cage-day means instead of the wild bootstrap "
+        "(its interval is too narrow with so few units); the estimate is the mean of cage-day means"
+    )
+    return ClusterBootstrapResult(
+        m, se, m - q * se, m + q * se, p, g, 0, f"t-test on cage-day means ({g - 1} df)", (note,)
+    )
+
+
 def wild_cluster_bootstrap(
     d: np.ndarray,
     cluster: np.ndarray,
@@ -384,6 +418,8 @@ def wild_cluster_bootstrap(
         return ClusterBootstrapResult(
             float(d.mean()) if n else nan, nan, nan, nan, nan, g, 0, "undefined: needs at least 2 clusters"
         )
+    if g < MIN_WILD_CLUSTERS:
+        return _cluster_means_t(d, inv, g, level, alternative)
     if g < 10:
         notes.append(f"only {g} independent units (cage-days): the interval is approximate")
     sizes = np.bincount(inv, minlength=g).astype(np.float64)

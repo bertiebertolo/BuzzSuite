@@ -337,12 +337,17 @@ def resting_frame_counts(
         lo = int(np.min(f0))
         hi = int(np.max(f0 + ln))
         w = np.stack([zone_mask(p, run_xy) for p in polygons], axis=1).astype(np.int64)
-        tot = np.zeros(hi - lo + 1, dtype=np.int64)
-        inz = np.zeros((hi - lo + 1, nz), dtype=np.int64)
-        np.add.at(tot, f0 - lo, 1)
-        np.add.at(tot, f0 + ln - lo, -1)
-        np.add.at(inz, f0 - lo, w)
-        np.add.at(inz, f0 + ln - lo, -w)
+        size = hi - lo + 1
+        a, b = f0 - lo, f0 + ln - lo  # +1 where a run starts, -1 just after it ends
+        tot = np.bincount(a, minlength=size) - np.bincount(b, minlength=size)
+        inz = np.stack(
+            [
+                np.bincount(a, weights=w[:, z], minlength=size)
+                - np.bincount(b, weights=w[:, z], minlength=size)
+                for z in range(nz)
+            ],
+            axis=1,
+        ).astype(np.int64)
         tot = np.cumsum(tot)[:-1]
         inz = np.cumsum(inz, axis=0)[:-1]
         present = np.flatnonzero(tot > 0)
@@ -409,8 +414,13 @@ def bin_experiment(
     bin_ns: int = BIN_NS,
     progress: Callable[[float, str], None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    arrays_cache: dict[str, dict[str, np.ndarray]] | None = None,
 ) -> Binned:
-    """Sum every chunk's per-frame counts into bins (see the module docstring)."""
+    """Sum every chunk's per-frame counts into bins (see the module docstring).
+
+    ``arrays_cache`` (optional) keeps the loaded resting arrays between calls, for analyses that
+    bin the same experiment several times.
+    """
     lo, hi = experiment_span(eclock, layout)
     t0 = lo if t_start_ns is None else t_start_ns - t_start_ns % NS_PER_HOUR
     t1 = hi if t_end_ns is None else t_end_ns
@@ -436,7 +446,12 @@ def bin_experiment(
         binned.add_recorded(frame_ns[_mask(frame_ns, t_start_ns, t_end_ns)])
         rest_path = cache_dir / "resting" / f"{c.chunk_id}.npz"
         if rest_path.exists():
-            resting = load_npz(rest_path)
+            if arrays_cache is not None:
+                resting = arrays_cache.get(c.chunk_id) or arrays_cache.setdefault(
+                    c.chunk_id, load_npz(rest_path)
+                )
+            else:
+                resting = load_npz(rest_path)
             keep_runs = (
                 ~walking_runs(resting, walking_px_per_s, fps) if walking_px_per_s is not None else None
             )
