@@ -30,7 +30,7 @@ def test_job_status_events_cancel_and_cleanup(tmp_path) -> None:
     (run / "experiments").mkdir()
     (run / "report.html").write_text("x", encoding="utf-8")
     jobs.remove_partial_run(run)
-    assert sorted(p.name for p in run.iterdir()) == [jobs.CANCEL, jobs.EVENTS, jobs.STATUS]
+    assert sorted(p.name for p in run.iterdir()) == [jobs.MARKER, jobs.CANCEL, jobs.EVENTS, jobs.STATUS]
     job.finish("failed", DataError("bad", hint="do this"), 4)
     st = jobs.read_status(run)
     assert st["state"] == "failed" and st["hint"] == "do this" and st["exit_code"] == 4
@@ -130,14 +130,42 @@ def test_runs_never_touch_an_experiment_or_foreign_folder(exp, tmp_path) -> None
     other = tmp_path / "other"
     other.mkdir()
     (other / "thesis.docx").write_text("precious", encoding="utf-8")
-    with pytest.raises(ConfigError, match="already holds other files"):
+    with pytest.raises(ConfigError, match="did not create"):
         jobs.Job(other)
-    # clean-up removes only a run's own outputs, even if called on a folder with other files
+    # clean-up never touches a folder BuzzPhono did not create, whatever its contents are called
     (other / "experiments").mkdir()
     jobs.remove_partial_run(other)
-    assert (other / "thesis.docx").read_text(encoding="utf-8") == "precious" and not (
+    assert (other / "thesis.docx").read_text(encoding="utf-8") == "precious" and (
         other / "experiments"
     ).exists()
     before = sorted(p.name for p in exp.iterdir())
     jobs.remove_partial_run(exp)
     assert sorted(p.name for p in exp.iterdir()) == before
+
+
+def test_folders_named_like_run_outputs_are_not_runs(tmp_path) -> None:
+    """Review round 2: user data under run-output names must never be accepted or cleaned."""
+    from buzzphono.errors import ConfigError
+
+    trap = tmp_path / "trap"
+    (trap / "experiments" / "my_precious").mkdir(parents=True)
+    (trap / "experiments" / "my_precious" / "raw.csv").write_text("data", encoding="utf-8")
+    (trap / "settings.yml").write_text("x: 1", encoding="utf-8")
+    with pytest.raises(ConfigError, match="did not create"):
+        jobs.Job(trap)
+    jobs.remove_partial_run(trap)
+    assert (trap / "experiments" / "my_precious" / "raw.csv").read_text(encoding="utf-8") == "data"
+    with pytest.raises(DataError, match="not a BuzzPhono run folder"):
+        jobs.request_cancel(trap)
+    # a finished run is never reused (cancelling the new run would delete the old results)
+    done = tmp_path / "done"
+    job = jobs.Job(done)
+    (done / "run_manifest.json").write_text("{}", encoding="utf-8")
+    job.finish("done")
+    with pytest.raises(ConfigError, match="finished run"):
+        jobs.Job(done)
+    # a folder the app created for a run (marker + settings) is accepted
+    fresh = tmp_path / "fresh"
+    jobs.claim_run_dir(fresh)
+    (fresh / "settings.yml").write_text("x: 1", encoding="utf-8")
+    jobs.Job(fresh)

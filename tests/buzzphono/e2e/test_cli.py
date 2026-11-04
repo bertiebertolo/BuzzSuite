@@ -204,4 +204,4 @@ def test_cli_error_paths_have_clear_messages(exp, tmp_path, capsys) -> None:
     assert run(["status", str(tmp_path)]) == 4
     assert run(["report", str(tmp_path), "--no-open"]) == 4
     assert run(["compare", str(tmp_path), "-o", str(tmp_path / "c")]) == 4
-    assert run(["status", str(tmp_path / "r"), "--cancel"]) == 0 and (tmp_path / "r" / "CANCEL").is_file()
+    assert run(["status", str(tmp_path / "r"), "--cancel"]) == 4 and not (tmp_path / "r").exists()

@@ -171,7 +171,7 @@ def test_few_cage_days_use_the_cluster_robust_t_interval() -> None:
         covered += r.ci_low <= df["true_effect"].mean() <= r.ci_high
         assert r.ci_low <= d.mean() <= r.ci_high and r.mean == pytest.approx(d.mean())  # same estimand
     assert covered / reps >= 0.92
-    assert r.method.startswith("cluster-robust t-test") and r.n_clusters == 3 < MIN_WILD_CLUSTERS
+    assert r.method.startswith("CR2 t-test") and r.n_clusters == 3 < MIN_WILD_CLUSTERS
     assert "cage-days" in r.warnings[0]
 
 

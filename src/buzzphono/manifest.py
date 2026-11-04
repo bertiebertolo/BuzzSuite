@@ -92,7 +92,16 @@ def _inputs(result: RunResult) -> list[dict[str, Any]]:
 
 def outputs(run_dir: Path) -> dict[str, str]:
     """Relative path -> SHA-256 of every file the run wrote (except the manifest and report)."""
-    skip = {MANIFEST, "report.html", "report.pdf"}
+    skip = {
+        MANIFEST,
+        "report.html",
+        "report.pdf",
+        ".buzzphono_run",
+        "status.json",
+        "events.jsonl",
+        "process.log",
+        "settings.yml",
+    }
     return {
         p.relative_to(run_dir).as_posix(): sha256_file(p)
         for p in sorted(run_dir.rglob("*"))

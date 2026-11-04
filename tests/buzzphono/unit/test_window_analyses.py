@@ -157,13 +157,23 @@ def test_conclusion_wording_follows_the_plan() -> None:
         {
             "wild_cluster_ci_low": 0.01,
             "wild_cluster_ci_high": 0.05,
+            "wild_cluster_p_value": 0.004,
             "block_signflip_p_value": 0.01,
             "wilcoxon_p_value": 0.001,
             "mean_delta": 0.03,
         }
     )
-    assert conclusion(main, None) == "Evidence of an effect"
-    sham = pd.Series({"wild_cluster_ci_low": 0.01, "wild_cluster_ci_high": 0.04, "mean_delta": 0.025})
-    assert conclusion(main, sham).startswith("Suggestive")  # a comparable sham effect blocks "evidence"
-    weak = pd.Series({**main, "block_signflip_p_value": 0.3, "wilcoxon_p_value": 0.2})
+    differs = pd.Series({"wild_cluster_ci_low": 0.005, "wild_cluster_ci_high": 0.04, "mean_delta": 0.02})
+    assert conclusion(main, differs) == "Evidence of an effect"
+    # the sham changes as much as the tone: (ON - OFF) - (ON' - OFF') includes 0
+    same = pd.Series({"wild_cluster_ci_low": -0.02, "wild_cluster_ci_high": 0.02, "mean_delta": 0.0})
+    assert conclusion(main, same).startswith("Not attributable to the tone")
+    # interval excludes 0 but p is not below 0.05 (equal-tailed interval vs symmetric p): no evidence
+    split = pd.Series({**main, "wild_cluster_p_value": 0.06})
+    assert conclusion(split, differs).startswith("Suggestive")
+    weak = pd.Series(
+        {**main, "wild_cluster_p_value": 0.4, "block_signflip_p_value": 0.3, "wilcoxon_p_value": 0.2}
+    )
     assert conclusion(weak, None) == "No clear effect"
+    cages = pd.Series({**main, "cage_cluster_ci_low": -0.01, "cage_cluster_ci_high": 0.06})
+    assert conclusion(cages, differs) == "Evidence of an effect (not confirmed with whole cages as units)"

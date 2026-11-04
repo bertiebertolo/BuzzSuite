@@ -29,7 +29,7 @@ from buzzphono.io.cache import cache_dir_for
 from buzzphono.io.discover import ExperimentLayout, discover
 from buzzphono.io.ingest import IngestReport, ingest
 from buzzphono.io.playback_log import PlaybackLog, read_playback_log
-from buzzphono.jobs import check_run_dir, experiment_lock
+from buzzphono.jobs import claim_run_dir, experiment_lock
 from buzzphono.metrics import attraction_index as ai
 from buzzphono.metrics.cycles import (
     Coverage,
@@ -152,8 +152,7 @@ def run(
     make_report: bool = True,
 ) -> RunResult:
     run_dir = run_dir or default_run_dir(config)
-    check_run_dir(run_dir)  # never write into an experiment folder or a folder with other files
-    run_dir.mkdir(parents=True, exist_ok=True)
+    claim_run_dir(run_dir)  # never write into an experiment folder, a foreign or a finished one
     result = RunResult(run_dir, config, [], started=datetime.now().isoformat(timespec="seconds"))
     steps = _Steps(progress, cancel, len(config.experiments) + 1)
     labels: set[str] = set()
@@ -444,8 +443,20 @@ class _Ctx:
 
 
 def _resting_fraction(ctx: _Ctx) -> None:
+    good = ctx.good.assign(
+        _zero=0.0,
+        tone_minus_sham=(ctx.good["on_colony_frac_in_zone"] - ctx.good["off_colony_frac_in_zone"])
+        - (ctx.good["sham_on_colony_frac_in_zone"] - ctx.good["sham_off_colony_frac_in_zone"]),
+    )
     rows = [
         ctx.compare("off_colony_frac_in_zone", "on_colony_frac_in_zone", "ON vs OFF (speaker zone)"),
+        ctx.compare(
+            "_zero",
+            "tone_minus_sham",
+            "tone minus sham: (ON − OFF) − (ON' − OFF')",
+            data=good,
+            by_phase=False,
+        ),
         ctx.compare(
             "sham_off_colony_frac_in_zone", "sham_on_colony_frac_in_zone", "sham: ON' vs OFF' (no tone)"
         ),
@@ -519,22 +530,30 @@ def _psth(ctx: _Ctx) -> None:
         n_resamples=min(ctx.config.stats.n_resamples, 999),
         seed=ctx.config.stats.seed,
     )
-    # F2 contrast: speaker-zone fraction 0-5 min after the onset vs the 5 min before, per cycle
+    # F2 contrast: the change from the 5 min before to the 5 min after the tone onset, minus the same
+    # change at the sham onset (which also starts a fresh video chunk, so tracker warm-up cancels)
     from buzzphono.metrics.psth import bin_quantities, event_matrix
 
     values = bin_quantities(ctx.binned, ctx.fps)["colony_frac_in_zone"]
-    onsets = ctx.good["cycle_start_ns"].to_numpy(dtype=np.int64) + on0 * 60 * 10**9
-    mat, rel = event_matrix(values, ctx.binned, onsets, 5, 5)
-    with np.errstate(invalid="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        cyc = ctx.good.assign(
-            psth_pre_5min=np.nanmean(np.where(rel[None, :] < 0, mat, np.nan), axis=1),
-            psth_post_5min=np.nanmean(np.where(rel[None, :] >= 0, mat, np.nan), axis=1),
-        )
+    starts = ctx.good["cycle_start_ns"].to_numpy(dtype=np.int64)
+
+    def onset_change(minute: int) -> np.ndarray:
+        mat, rel = event_matrix(values, ctx.binned, starts + minute * 60 * 10**9, 5, 5)
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            post = np.nanmean(np.where(rel[None, :] >= 0, mat, np.nan), axis=1)
+            pre = np.nanmean(np.where(rel[None, :] < 0, mat, np.nan), axis=1)
+        return post - pre
+
+    cyc = ctx.good.assign(
+        _zero=0.0,
+        onset_change=onset_change(on0),
+        sham_onset_change=onset_change(ctx.windows["sham_on"][0]),
+    )
     ctx.res.tables["psth/onset_response"] = ctx.compare(
-        "psth_pre_5min",
-        "psth_post_5min",
-        "PSTH onset response: 0-5 min after vs 5 min before",
+        "sham_onset_change",
+        "onset_change",
+        "PSTH onset response (5 min after minus 5 min before), tone minus sham onset",
         data=cyc,
         by_phase=False,
     )
@@ -786,6 +805,21 @@ def _pooled(config: AnalysisConfig, result: RunResult, say: Progress, figs: bool
                 seed=st.seed,
                 by_phase=False,
             ),
+            paired_comparison(
+                cycles.assign(
+                    _zero=0.0,
+                    tone_minus_sham=(cycles["on_colony_frac_in_zone"] - cycles["off_colony_frac_in_zone"])
+                    - (cycles["sham_on_colony_frac_in_zone"] - cycles["sham_off_colony_frac_in_zone"]),
+                ),
+                "_zero",
+                "tone_minus_sham",
+                label="tone minus sham: (ON − OFF) − (ON' − OFF') (all experiments)",
+                alternative=st.alternative,
+                block_hours=st.block_hours,
+                n_resamples=st.n_resamples,
+                seed=st.seed,
+                by_phase=False,
+            ),
         ]
         pooled["statistics"] = add_conclusions(pd.concat(rows, ignore_index=True))
         if "reliability" in config.analyses:
@@ -863,7 +897,11 @@ BAND_PX = 20.0
 F2_SOURCES = (
     ("attraction_index/statistics", "attraction index (vs 0)", None),
     ("psth/onset_response", "PSTH onset response", None),
-    ("approach/statistics", "approach: directed (radial) velocity, ON vs OFF", "directed_velocity"),
+    (
+        "approach/statistics",
+        "approach: bouts per flight-second, ON vs OFF (validated measure)",
+        "bouts_per_flight_s",
+    ),
     ("spatial/band_statistics", "spatial: fraction in the speaker's 20-px band, ON vs OFF", None),
 )
 
@@ -905,35 +943,53 @@ def secondary_family(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return out
 
 
-def conclusion(main: pd.Series, sham: pd.Series | None, alpha: float = 0.05) -> str:
-    """The plan's wording (§8): evidence / suggestive / no clear effect."""
-    lo, hi = main.get("wild_cluster_ci_low", np.nan), main.get("wild_cluster_ci_high", np.nan)
+def _interval_excludes_zero(row: pd.Series, prefix: str = "wild_cluster") -> bool:
+    lo, hi = row.get(f"{prefix}_ci_low", np.nan), row.get(f"{prefix}_ci_high", np.nan)
+    return bool(np.isfinite(lo) and np.isfinite(hi) and (lo > 0 or hi < 0))
+
+
+def conclusion(main: pd.Series, tone_minus_sham: pd.Series | None, alpha: float = 0.05) -> str:
+    """The plan's wording (§8), with the sham tested directly.
+
+    *Evidence of an effect* needs the primary interval to exclude 0, the primary p-value and the
+    block sign-flip p-value to be below ``alpha``, and the tone's change to differ from the sham's
+    (the per-cycle difference (ON − OFF) − (ON' − OFF') has an interval excluding 0, same sign).
+    """
+    p = main.get("wild_cluster_p_value", np.nan)
     block_p = main.get("block_signflip_p_value", np.nan)
     wil_p = main.get("wilcoxon_p_value", np.nan)
-    excludes_zero = bool(np.isfinite(lo) and np.isfinite(hi) and (lo > 0 or hi < 0))
-    sham_ok = True
-    if sham is not None:
-        s_lo, s_hi = sham.get("wild_cluster_ci_low", np.nan), sham.get("wild_cluster_ci_high", np.nan)
-        sham_excl = bool(np.isfinite(s_lo) and np.isfinite(s_hi) and (s_lo > 0 or s_hi < 0))
-        comparable = abs(float(sham.get("mean_delta", 0.0))) >= 0.5 * abs(float(main.get("mean_delta", 0.0)))
-        sham_ok = not (sham_excl and comparable)
-    if excludes_zero and np.isfinite(block_p) and block_p < alpha and sham_ok:
-        return "Evidence of an effect"
+    primary = _interval_excludes_zero(main) and np.isfinite(p) and p < alpha
+    if primary and np.isfinite(block_p) and block_p < alpha:
+        if tone_minus_sham is not None:
+            same_sign = np.sign(tone_minus_sham.get("mean_delta", np.nan)) == np.sign(
+                main.get("mean_delta", np.nan)
+            )
+            if not (_interval_excludes_zero(tone_minus_sham) and same_sign):
+                return "Not attributable to the tone (the sham changes similarly)"
+        text = "Evidence of an effect"
+        if "cage_cluster_ci_low" in main and not _interval_excludes_zero(main, "cage_cluster"):
+            text += " (not confirmed with whole cages as units)"
+        return text
     if np.isfinite(wil_p) and wil_p < alpha:
         return "Suggestive (per-cycle Wilcoxon only)"
     return "No clear effect"
 
 
 def add_conclusions(stats: pd.DataFrame) -> pd.DataFrame:
-    """A ``conclusion`` column on the headline rows (ON vs OFF, each phase), judged against the sham."""
+    """A ``conclusion`` on the headline row (all phases pooled). Phase rows are descriptive (see their
+    Holm-adjusted p-values); a phase with too few cycles says it was not tested."""
     out = stats.copy()
     out["conclusion"] = ""
     main = out["comparison"].isin(["ON vs OFF (speaker zone)", "ON vs OFF (all experiments)"])
-    sham = out["comparison"].str.startswith("sham")
-    sham_all = out[sham & (out["phase"] == "all")]
-    sham_row = sham_all.iloc[0] if len(sham_all) else None
+    tms = out[out["comparison"].str.startswith("tone minus sham") & (out["phase"] == "all")]
+    tms_row = tms.iloc[0] if len(tms) else None
     for i in out.index[main]:
-        out.loc[i, "conclusion"] = conclusion(out.loc[i], sham_row)
+        if out.loc[i, "phase"] == "all":
+            out.loc[i, "conclusion"] = conclusion(out.loc[i], tms_row)
+        elif not np.isfinite(out.loc[i].get("wild_cluster_p_value", np.nan)):
+            out.loc[i, "conclusion"] = "not tested (fewer than 4 cycles)"
+        else:
+            out.loc[i, "conclusion"] = "phase: see Holm-adjusted p"
     return out
 
 

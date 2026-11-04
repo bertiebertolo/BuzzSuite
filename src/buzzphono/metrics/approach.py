@@ -278,6 +278,10 @@ def approach_cycle_table(result: ApproachResult, cycles: pd.DataFrame, controls:
     s[f"directed_velocity_{u}_per_s"] = s[f"radial_velocity_{u}_per_s__speaker"] - (
         s[ctrl_cols].mean(axis=1) if ctrl_cols else 0.0
     )
+    # without control zones the "directed" velocity is the speaker's alone: say so in every row
+    s["directed_velocity_reference"] = (
+        "speaker minus mean of control zones" if ctrl_cols else "speaker only (no control zones)"
+    )
     b = result.bouts
     if len(b):
         agg = b.groupby(["cycle_start_ns", "window"]).agg(

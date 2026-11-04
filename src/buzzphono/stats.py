@@ -362,34 +362,55 @@ def _cr1_se(cluster_resid_sums: np.ndarray, n: int, g: int) -> np.ndarray:
 MIN_WILD_CLUSTERS = 6  # below this the wild bootstrap interval under-covers (docs/STATS_PLAN.md, Changes)
 
 
+def cr2_bm(d: np.ndarray, inv: np.ndarray, g: int) -> tuple[float, float, float]:
+    """Mean, CR2 standard error and Bell-McCaffrey degrees of freedom for the mean of ``d``.
+
+    For a mean (intercept-only model) both have closed forms: with cluster sizes n_g, shares
+    p_g = n_g / n and residual sums S_g, Var = sum S_g^2 / (1 - p_g) / n^2, and the degrees of freedom
+    are the Satterthwaite value (tr M)^2 / tr(M^2) of the quadratic form Var = y'My under
+    independent, equal-variance errors (Bell & McCaffrey 2002; Imbens & Kolesar 2016).
+    """
+    n = d.size
+    m = float(d.mean())
+    sizes = np.bincount(inv, minlength=g).astype(np.float64)
+    s = np.bincount(inv, weights=d - m, minlength=g)
+    p = sizes / n
+    a = 1.0 / (n**2 * (1.0 - p))
+    se = float(np.sqrt(np.sum(a * s**2)))
+    # g_g'g_h = delta_gh n_g - n_g n_h / n
+    gram = np.diag(sizes) - np.outer(sizes, sizes) / n
+    trace = float(np.sum(a * np.diag(gram)))
+    trace_sq = float(np.sum(np.outer(a, a) * gram**2))
+    df = trace**2 / trace_sq if trace_sq > 0 else float("nan")
+    return m, se, df
+
+
 def _cluster_robust_t(
     d: np.ndarray, inv: np.ndarray, g: int, level: float, alternative: Alternative
 ) -> ClusterBootstrapResult:
-    """Cluster-robust (CR1) t-test of the mean with g − 1 degrees of freedom. Used instead of the
-    wild bootstrap below :data:`MIN_WILD_CLUSTERS` clusters: same estimate (the mean over cycles),
-    honest coverage with very few clusters (docs/STATS_PLAN.md, Changes)."""
+    """CR2 t-test of the mean with Bell-McCaffrey degrees of freedom, used instead of the wild
+    bootstrap below :data:`MIN_WILD_CLUSTERS` clusters: same estimate (the mean over cycles), and
+    close to nominal error rates with few, unequal clusters (docs/STATS_PLAN.md, Changes)."""
     from scipy import stats as sps
 
-    n = d.size
-    m = float(d.mean())
-    se = float(_cr1_se(np.bincount(inv, weights=d - m, minlength=g), n, g))
-    q = float(sps.t.ppf(1 - (1 - level) / 2, g - 1))
-    if se > 0:
-        tstat = m / se
-        if alternative == "two-sided":
-            p = float(2 * sps.t.sf(abs(tstat), g - 1))
-        elif alternative == "greater":
-            p = float(sps.t.sf(tstat, g - 1))
-        else:
-            p = float(sps.t.cdf(tstat, g - 1))
+    m, se, df = cr2_bm(d, inv, g)
+    if not (se > 0 and np.isfinite(df)):
+        nan = float("nan")
+        return ClusterBootstrapResult(m, se, nan, nan, nan, g, 0, "CR2 t-test (undefined: no spread)", ())
+    q = float(sps.t.ppf(1 - (1 - level) / 2, df))
+    tstat = m / se
+    if alternative == "two-sided":
+        pval = float(2 * sps.t.sf(abs(tstat), df))
+    elif alternative == "greater":
+        pval = float(sps.t.sf(tstat, df))
     else:
-        p = float("nan")
+        pval = float(sps.t.cdf(tstat, df))
     note = (
-        f"only {g} cage-days: cluster-robust t-test ({g - 1} df) instead of the wild bootstrap, whose "
-        "interval is too narrow with so few units"
+        f"only {g} cage-days: CR2 t-test with Bell-McCaffrey df ({df:.1f}) instead of the wild bootstrap, "
+        "whose interval is too narrow with so few units"
     )
     return ClusterBootstrapResult(
-        m, se, m - q * se, m + q * se, p, g, 0, f"cluster-robust t-test ({g - 1} df)", (note,)
+        m, se, m - q * se, m + q * se, pval, g, 0, f"CR2 t-test (Bell-McCaffrey df {df:.1f})", (note,)
     )
 
 
@@ -603,6 +624,8 @@ def mixed_model(
     var_resid = float(fit.scale) * scale**2
     singular = var_group < 1e-8 * max(var_resid, 1e-300)
     messages.append(f"optimiser: {used}")
+    if "phase" in formula:
+        messages.append("estimate is phase-balanced (each phase weighted equally), not the mean over cycles")
     return MixedModelResult(
         est,
         se,
@@ -660,6 +683,11 @@ def summarise_paired(
     out["wild_cluster"] = wild_cluster_bootstrap(
         dd, cd, alternative=alternative, n_resamples=n_resamples, seed=seed
     )
+    if cage is not None and len(set(np.asarray(cage)[ok])) >= 2:
+        # plan §3: whole cages as clusters, as a sensitivity check of the cage-day independence
+        out["cage_cluster"] = wild_cluster_bootstrap(
+            dd, np.asarray(cage)[ok], alternative=alternative, n_resamples=n_resamples, seed=seed
+        )
     clusters = [dd[cd == c] for c in np.unique(cd)]
     out["median_delta_ci"] = cluster_bootstrap_ci(
         clusters,

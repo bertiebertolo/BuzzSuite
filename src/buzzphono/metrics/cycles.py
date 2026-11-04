@@ -165,8 +165,10 @@ def _flatten(prefix: str, value: Any, out: dict[str, Any]) -> None:
     if isinstance(value, dict):
         for k, v in value.items():
             _flatten(f"{prefix}_{k}" if prefix else str(k), v, out)
-    elif isinstance(value, (tuple, list)):
-        out[prefix] = "; ".join(map(str, value))
+    elif isinstance(value, (tuple, list, np.ndarray)):
+        out[prefix] = "; ".join(
+            f"{v:.3g}" if isinstance(v, float) else str(v) for v in np.asarray(value).tolist()
+        )
     else:
         out[prefix] = value
 
@@ -235,6 +237,14 @@ def paired_comparison(
                 hour_of_day=df["hour"].to_numpy()[finite] if "hour" in df else None,
             )
             row.update(flatten_summary(summary))
+            ac = np.asarray(summary.get("autocorrelation", []), dtype=np.float64).ravel()
+            lag6 = float(ac[5]) if ac.size > 5 and np.isfinite(ac[5]) else float("nan")  # lags 1..6
+            row["autocorrelation_lag6"] = lag6
+            if np.isfinite(lag6) and lag6 > 0.3:  # plan §3: blocks may be too short
+                row["autocorrelation_warning"] = (
+                    f"hour-to-hour correlation at lag 6 is {lag6:.2f} (> 0.3): neighbouring blocks are "
+                    "not independent; read the block test with care"
+                )
         rows.append(row)
     table = pd.DataFrame(rows)
     phase_rows = table["phase"] != "all"

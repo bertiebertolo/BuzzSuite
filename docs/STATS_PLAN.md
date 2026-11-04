@@ -173,3 +173,31 @@ hours are correlated.
     at the reported MDE; the new one gives 0.73–0.80, at 4–8 cage-days.
   - The experiment-level permutation test samples randomly when there are more than 200,000
     splits.
+- **2026-11-05 (review round 2): small-sample test, conclusion rule and F2 refined.**
+  - **Fewer than 6 cage-days:** CR2 standard error with Bell–McCaffrey degrees of freedom replaces
+    CR1 with G − 1 df. With unequal cage-day sizes CR1 rejected 7–12% of true nulls; CR2/BM gives
+    3.7–5.2% for every design except the extreme case of two cage-days of 24 and 3 cycles (7.3%).
+    With equal sizes its df equals G − 1. The estimate is still the mean over cycles.
+  - **Cages as clusters (§3, sensitivity):** reported as `cage_cluster_*` whenever there are at
+    least 2 cages. An "Evidence" conclusion that it does not confirm says "(not confirmed with
+    whole cages as units)".
+  - **Conclusion (§8):**
+    - The sham is tested directly. The per-cycle difference (ON − OFF) − (ON′ − OFF′) must have an
+      interval excluding 0 with the same sign; otherwise the result reads "Not attributable to the
+      tone".
+    - The primary p-value must also be below 0.05, not only the interval.
+    - Only the all-phase row gets a conclusion; phase rows are read through their Holm-adjusted
+      p-values.
+  - **F2:**
+    - The PSTH contrast is now the onset change minus the sham-onset change, which removes the
+      chunk warm-up.
+    - The approach contrast uses bouts per flight-second, the measure that passed the positive
+      control. Radial velocity failed it (`metrics/approach.py: VALIDATION`).
+  - **Other:**
+    - Sensitivity sign flips are flagged only when the variant's interval excludes 0 on the other
+      side; only zone *shifts* beyond half the zone width are exempt.
+    - The mixed-model estimate is labelled phase-balanced.
+    - A lag-6 autocorrelation above 0.3 adds a warning.
+  - **Known limitation:** cage-days split at midnight. With strong night-time correlation across
+    midnight (ρ ≥ 0.6) the false-positive rate can reach 0.06–0.10. The cage-cluster check and the
+    block test (12-h blocks on the clock) bound this.

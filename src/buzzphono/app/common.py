@@ -113,7 +113,7 @@ def new_run_dir(settings: dict[str, Any]) -> Path:
 
 def start_job(settings: dict[str, Any], run_dir: Path) -> subprocess.Popen[bytes]:
     """Write the settings into the run folder and start the analysis as its own process."""
-    run_dir.mkdir(parents=True, exist_ok=True)
+    jobs.claim_run_dir(run_dir)
     cfg = run_dir / "settings.yml"
     cfg.write_text(yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8")
     cmd = [

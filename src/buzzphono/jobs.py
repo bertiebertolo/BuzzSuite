@@ -48,7 +48,7 @@ class Job:
         self.run_dir = run_dir
         self.min_interval_s = min_interval_s
         self._last = 0.0
-        check_run_dir(run_dir)
+        claim_run_dir(run_dir)
         self.status: dict[str, Any] = {
             "state": "running",
             "progress": 0.0,
@@ -94,8 +94,9 @@ class Job:
 
 
 def request_cancel(run_dir: Path) -> None:
-    """Ask a running job to stop (it notices within a few seconds)."""
-    run_dir.mkdir(parents=True, exist_ok=True)
+    """Ask a running job to stop (it notices within a few seconds). Only in a run folder."""
+    if not is_run_dir(run_dir):
+        raise DataError(f"{run_dir} is not a BuzzPhono run folder; nothing to cancel.")
     (run_dir / CANCEL).write_text(_now(), encoding="utf-8")
 
 
@@ -108,16 +109,18 @@ def read_status(run_dir: Path) -> dict[str, Any] | None:
 
 # Everything a run writes into its folder. Clean-up deletes only these, never anything else.
 RUN_OUTPUTS = ("experiments", "pooled", "report.html", "report.pdf", "run_manifest.json")
-RUN_FILES = (STATUS, EVENTS, CANCEL, "settings.yml", "process.log", *RUN_OUTPUTS)
+MARKER = ".buzzphono_run"  # written when BuzzPhono creates a run folder; required before any clean-up
 EXPERIMENT_MARKERS = ("tracking_resting", "tracking_moving", "final_tracking_data", "individual_images")
 
 
-def check_run_dir(run_dir: Path) -> None:
-    """Refuse a results folder that is (or holds) anything other than a BuzzPhono run.
+def is_run_dir(run_dir: Path) -> bool:
+    """True only for a folder that BuzzPhono itself created for a run (it holds the marker file)."""
+    return (run_dir / MARKER).is_file()
 
-    Results must never be written into, or cleaned out of, an experiment folder or any folder with
-    other files in it.
-    """
+
+def check_run_dir(run_dir: Path) -> None:
+    """Refuse a results folder unless it is new, empty, or a run folder BuzzPhono created and has not
+    finished. Names alone prove nothing: only BuzzPhono's own marker file makes a folder a run's."""
     if not run_dir.exists():
         return
     if not run_dir.is_dir():
@@ -128,19 +131,37 @@ def check_run_dir(run_dir: Path) -> None:
             hint="Leave out --run-dir (results then go to <experiment>/plots/buzzphono/) "
             "or choose an empty folder.",
         )
-    foreign = sorted(p.name for p in run_dir.iterdir() if p.name not in RUN_FILES)
-    if foreign:
+    if not any(run_dir.iterdir()):
+        return
+    if not is_run_dir(run_dir):
         raise ConfigError(
-            f"The results folder {run_dir} already holds other files ({', '.join(foreign[:5])}"
-            f"{' ...' if len(foreign) > 5 else ''}).",
+            f"The results folder {run_dir} already holds files BuzzPhono did not create.",
             hint="Choose a new or empty folder for the results.",
+        )
+    status = read_status(run_dir) or {}
+    if (run_dir / "run_manifest.json").exists() or status.get("state") in ("done", "failed", "cancelled"):
+        raise ConfigError(
+            f"{run_dir} already holds a finished run.",
+            hint="Choose a new folder; earlier results are never overwritten or deleted.",
+        )
+
+
+def claim_run_dir(run_dir: Path) -> None:
+    """Check the folder (see check_run_dir), create it and mark it as this run's own."""
+    check_run_dir(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    marker = run_dir / MARKER
+    if not marker.exists():
+        marker.write_text(
+            f"BuzzPhono run folder, created {_now()} by process {os.getpid()}\n", encoding="utf-8"
         )
 
 
 def remove_partial_run(run_dir: Path) -> None:
     """Delete a cancelled or failed run's own outputs (see RUN_OUTPUTS), keeping status.json and
-    events.jsonl as the record. Nothing else in the folder is ever touched."""
-    if not run_dir.is_dir():
+    events.jsonl as the record. Only in a folder BuzzPhono created (marker file); nothing else in the
+    folder is ever touched."""
+    if not run_dir.is_dir() or not is_run_dir(run_dir):
         return
     for name in RUN_OUTPUTS:
         p = run_dir / name

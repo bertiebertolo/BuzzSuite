@@ -12,10 +12,10 @@ The headline comparison is recomputed with one choice changed at a time:
 
 Every variant uses the same hour-cycles as the baseline (the baseline's usable cycles), so only the
 choice changes. Flags apply only when the baseline interval excludes 0 (otherwise there is no
-effect whose robustness could be judged). A variant is flagged when the mean Δ changes sign (for
-zone changes only when the change is at most half the zone's width: moving the zone further takes
-it off the speaker, and the effect is then expected to vanish), or when a change of at most 5 px in
-the zone changes the mean Δ by more than half.
+effect whose robustness could be judged). A variant is flagged when its own interval excludes 0 on
+the other side (a real sign reversal; zone shifts of more than half the zone's width are exempt,
+because they take the zone off the speaker), or when a change of at most 5 px in the zone changes
+the mean Δ by more than half.
 """
 
 from __future__ import annotations
@@ -282,16 +282,16 @@ def run_sensitivity(
         if not baseline_effect:
             flags.append("")
             continue
-        # moving or growing the zone by more than half its width takes it off the speaker: a sign
-        # flip there is expected, not a sign of a fragile result
-        small_zone_change = not str(r["family"]).startswith("zone") or abs(r["zone_change_px"]) <= half_width
-        if (
-            np.isfinite(r["mean_delta"])
-            and np.sign(r["mean_delta"]) != np.sign(base_delta)
-            and r["mean_delta"] != 0
-            and small_zone_change
-        ):
-            f.append("sign flips")
+        # shifting the zone by more than half its width takes it off the speaker: the effect is then
+        # expected to vanish. (A grown zone still contains the speaker, so growth is never exempt.)
+        off_speaker = str(r["family"]).startswith("zone shift") and abs(r["zone_change_px"]) > half_width
+        # a flip counts only when the variant's own interval excludes 0 on the other side
+        lo, hi = r.get("ci_low", np.nan), r.get("ci_high", np.nan)
+        opposite = (base_delta > 0 and np.isfinite(hi) and hi < 0) or (
+            base_delta < 0 and np.isfinite(lo) and lo > 0
+        )
+        if opposite and not off_speaker:
+            f.append("sign flips (interval excludes 0 on the other side)")
         if (
             r["family"].startswith("zone")
             and abs(r["zone_change_px"]) <= 5
@@ -300,6 +300,7 @@ def run_sensitivity(
             f.append("changes by more than half within 5 px")
         flags.append("; ".join(f))
     table["flag"] = flags
+    table["flagged"] = [bool(x) for x in flags]
     # BH over the primary cluster-robust p (wild cluster; the block test when too few cage-days)
     wild = table["p_wild_cluster"].to_numpy(dtype=np.float64)
     block = table["p_block_signflip"].to_numpy(dtype=np.float64)
