@@ -11,7 +11,7 @@ back-end, and one experiment format:
 |---|---|
 | **Activity** | Tracks flying/resting mosquito activity per cage from raw video (motion-aware Hungarian-assignment tracker with blob splitting for crowded frames). |
 | **BuzzSwarm** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day. The same analysis runs headless with `buzzsuite_cli.py swarm --which clock`; the older Sholl/r50 analyses remain available from the CLI. |
-| **BuzzPhono** | Phonotaxis analysis — speaker-zone resting fraction from a user-drawn polygon zone, comparing stimulus ON vs. OFF windows. |
+| **BuzzPhono** | Phonotaxis analysis — does a sound draw mosquitoes to the speaker? Speaker-zone resting fraction during the tone vs. just before, every hour, with cluster-robust statistics, sham and control-zone checks, time courses, time of day, spatial maps, directed flight, flight phonotaxis, reliability and sensitivity. Its own package and app (`src/buzzphono/`, environment `buzzphono_env`); see the [BuzzPhono guide](docs/BUZZPHONO_GUIDE.md). |
 
 A bundled **H264 → MP4 Converter** handles the raw-video intake step (lossless remux, with
 automatic SPS/PPS header recovery for multi-segment Raspberry Pi recordings).
@@ -106,7 +106,7 @@ buttons call — no separate code path, byte-identical results:
 python buzzsuite_cli.py track   --experiment <dir-or-json> --workers 8   # batch-track segments
 python buzzsuite_cli.py swarm   --experiment <exp-dir> --which clock     # clock-time swarm analysis + plots
 python buzzsuite_cli.py swarm   --experiment <exp-dir> --which all       # older Sholl/r50 BuzzSwarm analyses
-python buzzsuite_cli.py phono   --experiment <exp-dir>                   # BuzzPhono analysis
+python buzzsuite_cli.py phono   --experiment <exp-dir>                   # BuzzPhono analysis (runs in buzzphono_env)
 python buzzsuite_cli.py export  --experiment <exp-dir>                   # tracking → Parquet/CSV
 python buzzsuite_cli.py convert --in-dir <raw-video-folder>              # .h264 → .mp4
 ```
@@ -131,7 +131,9 @@ batch_processing_tab_manager.py, *_tab_manager.py   ← per-tab UI + orchestrati
 buzzwatch_data_analysis/     ← the tracking engine (see note below)
 buzzswarm/                   ← BuzzSwarm: clock-time swarm analysis (clock_analysis.py) and
                                its plots (clock_plots.py), plus the older Sholl/r50 scripts
-buzzphono/                   ← BuzzPhono speaker-zone phonotaxis analysis
+src/buzzphono/               ← BuzzPhono phonotaxis package + app (own env; docs/BUZZPHONO_GUIDE.md)
+buzzphono_bridge.py          ← runs BuzzPhono from BuzzSuite (CLI, run_all_analysis, Phonotaxis tab)
+archive/                     ← superseded phonotaxis scripts, kept for provenance
 h264_converter/               ← H264→MP4 conversion (ffmpeg wrapper)
 docs/                        ← user guide
 ```

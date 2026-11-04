@@ -45,3 +45,22 @@ def test_bouts_filter_by_drop_and_duration() -> None:
         )
         == []
     )
+
+
+def test_flyer_mask_matches_the_per_track_rule() -> None:
+    from buzzphono.metrics.approach import flyer_mask
+
+    rng = np.random.default_rng(5)
+    owners, pts = [], []
+    for k in range(40):
+        n = int(rng.integers(1, 25))
+        speed = rng.choice([0.5, 10.0])
+        owners.append(np.full(n, k))
+        pts.append(np.cumsum(rng.normal(0, speed, (n, 2)), axis=0))
+    own, xy = np.concatenate(owners), np.concatenate(pts)
+    mask = flyer_mask(own, xy, scale=1.0, min_points=10)
+    for k in range(40):
+        p = xy[own == k]
+        expect = len(p) >= 10 and np.hypot(*np.diff(p, axis=0).T).mean() >= 4.0
+        assert mask[own == k].all() == expect and mask[own == k].any() == expect
+    assert flyer_mask(np.empty(0, dtype=np.int32), np.empty((0, 2)), 1.0, 10).size == 0

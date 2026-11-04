@@ -17,6 +17,7 @@ Quantities (per bin):
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 
 import numpy as np
@@ -143,7 +144,8 @@ def psth(
 def _bin_tests(
     mat: np.ndarray, base_cols: np.ndarray, clusters: np.ndarray, n_resamples: int, seed: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # events with no baseline data give NaN
         base = np.nanmean(np.where(base_cols[None, :], mat, np.nan), axis=1) if base_cols.any() else None
     p = np.full(mat.shape[1], np.nan)
     if base is None:

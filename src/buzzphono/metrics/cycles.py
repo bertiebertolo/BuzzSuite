@@ -244,3 +244,21 @@ def paired_comparison(
 
 def assumptions_table() -> pd.DataFrame:
     return pd.DataFrame({"method": list(ASSUMPTIONS), "assumptions": list(ASSUMPTIONS.values())})
+
+
+def add_control_contrast(
+    cycles: pd.DataFrame, binned: Binned, windows: tuple[str, ...], controls: list[str]
+) -> pd.DataFrame:
+    """A copy with, per window, ``<w>_control_area_matched`` – the mean control-zone fraction scaled to
+    the speaker zone's area – and per cycle ``delta_speaker``, ``delta_control`` (ON − OFF of each)."""
+    out = cycles.copy()
+    if not controls or not len(out):
+        return out
+    area = dict(zip(binned.zones, binned.zone_area_px, strict=True))
+    for w in windows:
+        cols = [out[zone_column(w, "colony_frac_in_zone", c)] * area["speaker"] / area[c] for c in controls]
+        out[f"{w}_control_area_matched"] = np.mean(np.vstack([c.to_numpy(dtype=float) for c in cols]), axis=0)
+    if {"on", "off"} <= set(windows):
+        out["delta_speaker"] = out["on_colony_frac_in_zone"] - out["off_colony_frac_in_zone"]
+        out["delta_control"] = out["on_control_area_matched"] - out["off_control_area_matched"]
+    return out

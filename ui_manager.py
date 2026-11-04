@@ -4,7 +4,7 @@ from video_tab_manager import VideoTabManager
 from batch_processing_tab_manager import BatchProcessingTabManager
 from setup_tab_manager import SetupTabManager
 from buzzswarm_tab_manager import BuzzswarmTabManager
-from buzzphono_tab_manager import BuzzphonoTabManager
+from buzzphono_launcher_tab import BuzzphonoLauncherTab
 from h264_tab_manager import H264TabManager
 from intake_wizard import IntakeWizardTabManager
 from experiment_dashboard import ExperimentDashboard
@@ -57,7 +57,7 @@ class UIManager:
         self.batch_processing_tab_manager = BatchProcessingTabManager(self.root, self, self.state_manager)
         self.setup_tab_manager = SetupTabManager(self.root, self, self.state_manager)
         self.buzzswarm_tab_manager = BuzzswarmTabManager(self.root, self, self.state_manager)
-        self.buzzphono_tab_manager = BuzzphonoTabManager(self.root, self, self.state_manager)
+        self.buzzphono_tab_manager = BuzzphonoLauncherTab(self.root, self, self.state_manager)
         self.h264_tab_manager = H264TabManager(self.root, self, self.state_manager)
         # Always-present workflow tabs (independent of module selection).
         self.intake_wizard = IntakeWizardTabManager(self.root, self, self.state_manager)

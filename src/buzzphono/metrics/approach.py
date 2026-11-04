@@ -73,24 +73,19 @@ def resting_jitter_px(resting: Mapping[str, np.ndarray]) -> float:
     return max(4.0 * mad, 2.0)
 
 
-def _flyer_tracks(
-    moving: Mapping[str, np.ndarray], scale: float, min_points: int
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    own = moving["det_obj"]
+def flyer_mask(own: np.ndarray, xy: np.ndarray, scale: float, min_points: int) -> np.ndarray:
+    """Per detection: does it belong to a flyer track (at least ``min_points`` points and a mean step
+    of at least 4 px/frame × camera scale)? Detections of one track are consecutive."""
     if own.size == 0:
-        return []
-    frames = moving["det_frame"]
-    xy = moving["det_xy"]
-    cuts = np.flatnonzero(np.diff(own)) + 1
-    out = []
-    for lo, hi in zip(np.r_[0, cuts], np.r_[cuts, own.size], strict=True):
-        if hi - lo < min_points:
-            continue
-        p = xy[lo:hi]
-        step = np.hypot(*np.diff(p, axis=0).T)
-        if step.mean() >= FLYER_STEP * scale:
-            out.append((frames[lo:hi], p))
-    return out
+        return np.zeros(0, dtype=bool)
+    _, inv, counts = np.unique(own, return_inverse=True, return_counts=True)
+    same = own[1:] == own[:-1]
+    step = np.hypot(*np.diff(xy, axis=0).T)
+    step_sum = np.bincount(inv[1:][same], weights=step[same], minlength=counts.size)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean_step = step_sum / np.maximum(counts - 1, 1)
+    ok = (counts >= min_points) & (mean_step >= FLYER_STEP * scale)
+    return ok[inv]
 
 
 def turning_points(d: np.ndarray, hysteresis: float) -> list[tuple[int, int]]:
@@ -182,29 +177,41 @@ def approach_analysis(
         mp = cache_dir / "moving" / f"{c.chunk_id}.npz"
         if c.chunk_id not in eclock.nf or not mp.exists():
             continue
-        for frames, xy_px in _flyer_tracks(load_npz(mp), scale, settings.min_points):
-            t = eclock.clock.frame_ns(c.name, frames)
-            xy = conv(xy_px)
-            dt = np.diff(t) / NS_PER_S
-            dt[dt <= 0] = 1.0 / fps
-            lab = window_labels(t[1:], windows, starts)
-            keep = lab >= 0
-            if keep.any():
-                cyc = (t[1:] - t[1:] % (3600 * NS_PER_S))[keep]
-                rec: dict[str, Any] = {
-                    "cycle_start_ns": cyc,
-                    "window": np.array(names)[lab[keep]],
-                    "flight_s": dt[keep],
-                }
-                for z, cz in centres.items():
-                    r = np.hypot(*(xy - cz).T)
-                    rec[f"radial_sum__{z}"] = -np.diff(r)[keep]  # Σ v·dt: distance closed towards the zone
-                step_rows.append(pd.DataFrame(rec))
-            d = distance_to_polygon(speaker_c, xy) if unit == "mm" else distance_to_polygon(speaker, xy_px)
+        moving = load_npz(mp)
+        sel = flyer_mask(moving["det_obj"], moving["det_xy"], scale, settings.min_points)
+        if not sel.any():
+            continue
+        own, xy_px = moving["det_obj"][sel], moving["det_xy"][sel]
+        t = eclock.clock.frame_ns(c.name, moving["det_frame"][sel])
+        xy = conv(xy_px)
+        # flyer steps of the whole chunk at once: radial velocity sums per (cycle, window)
+        same = own[1:] == own[:-1]
+        dt = np.diff(t) / NS_PER_S
+        dt[dt <= 0] = 1.0 / fps
+        lab = window_labels(t[1:], windows, starts)
+        keep = same & (lab >= 0)
+        if keep.any():
+            later = t[1:][keep]
+            rec: dict[str, Any] = {
+                "cycle_start_ns": later - later % (3600 * NS_PER_S),
+                "window": np.array(names)[lab[keep]],
+                "flight_s": dt[keep],
+            }
+            for z, cz in centres.items():
+                r = np.hypot(*(xy - cz).T)
+                rec[f"radial_sum__{z}"] = -np.diff(r)[keep]  # Σ v·dt: distance closed towards the zone
+            step_rows.append(pd.DataFrame(rec).groupby(["cycle_start_ns", "window"], as_index=False).sum())
+        # approach bouts, track by track, only where the distance range could hold one
+        d_all = distance_to_polygon(speaker_c, xy) if unit == "mm" else distance_to_polygon(speaker, xy_px)
+        cuts = np.flatnonzero(~same) + 1
+        for lo, hi in zip(np.r_[0, cuts], np.r_[cuts, own.size], strict=True):
+            d = d_all[lo:hi]
+            if d.size < 2 or float(d.max() - d.min()) < min_drop:
+                continue  # smoothing only narrows the range, so no bout can reach min_drop
             if d.size >= settings.smoothing_frames:
                 d = median_filter(d, size=settings.smoothing_frames, mode="nearest")
             bout_rows.extend(
-                _bouts(d, t, c.chunk_id, windows, starts, names, min_drop, settings, jitter, unit)
+                _bouts(d, t[lo:hi], c.chunk_id, windows, starts, names, min_drop, settings, jitter, unit)
             )
     bouts = pd.DataFrame(bout_rows)
     steps = pd.concat(step_rows, ignore_index=True) if step_rows else pd.DataFrame()

@@ -54,15 +54,14 @@ jobs:
   pi-tool:
     name: Pi log collector (Python ${{ matrix.python }}, stdlib only)
     runs-on: ubuntu-latest
+    # the official Python images: Raspberry Pi OS ships 3.9 (bullseye) or 3.11 (bookworm)
+    container: python:${{ matrix.python }}-slim
     strategy:
       fail-fast: false
       matrix:
         python: ["3.9", "3.11"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
       - name: Compile
         run: python -m py_compile tools/pi_collect_logs.py
       - name: Self-test

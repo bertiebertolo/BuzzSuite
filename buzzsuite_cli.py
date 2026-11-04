@@ -7,8 +7,8 @@ byte-identical to running from the app (no separate code path, no numeric diverg
     track  ->  batch_processing_tab_manager._run_batch_analysis  (multiprocessing.Pool)
     swarm  ->  --which clock: buzzswarm.clock_analysis.run + clock_plots.render_all (Swarming tab)
                otherwise:     buzzswarm.fru2_sholl_csv / fru2_pooled_analysis / fru2_per_trajectory_plots .run()
-    phono  ->  buzzphono_legacy.plot_speaker_distance_phonotaxis.run_speaker_distance_analysis()
-    phono-flight -> buzzphono_legacy.flight_phonotaxis.run_flight_phonotaxis (BuzzPhono tab, "Flight phonotaxis")
+    phono  ->  BuzzPhono (own environment) via buzzphono_bridge: speaker-zone resting fraction
+    phono-flight -> BuzzPhono (own environment) via buzzphono_bridge: flight phonotaxis
 
 Intended for the common workflow: set up + initialize experiments in the GUI during the day,
 then run the heavy tracking/analysis unattended (SSH, nohup, tmux, cron) without a display.
@@ -355,61 +355,52 @@ def _swarm_clock(args, exp_dirs):
 
 
 # ----------------------------------------------------------------- phono
-def cmd_phono(args):
+def _phono_forward(args, analyses, light_hours=None, extra=None):
+    """Run the new BuzzPhono package (its own environment) on one experiment via buzzphono_bridge."""
+    import tempfile
+
+    import buzzphono_bridge as bb
     _, exp_dir = _resolve_experiment(args.experiment, need_json=False)
-
-    start, end = args.start, args.end
-    if not start or not end:
-        ds, de = _derive_range(exp_dir)
-        start = start or ds
-        end = end or de
-
-    zones = args.zones or os.path.join(exp_dir, "custom_zones.json")
-    if not os.path.isfile(zones):
-        raise SystemExit("No custom_zones.json at %s — define the speaker zone first "
-                         "(GUI BuzzPhono tab, or the Step-4 zone editor)." % zones)
-
-    from buzzphono_legacy import plot_speaker_distance_phonotaxis as ph
-    ph.STIM_START_MIN, ph.STIM_END_MIN = args.on_start, args.on_end
-    ph.OFF_START_MIN, ph.OFF_END_MIN = args.off_start, args.off_end
-
-    _log("Experiment : %s" % exp_dir)
-    _log("Window     : %s -> %s   (ON %d-%d, OFF %d-%d, resting_only=%s)"
-         % (start, end, args.on_start, args.on_end, args.off_start, args.off_end, args.resting_only))
-    t0 = time.time()
-    out = ph.run_speaker_distance_analysis(
-        exp_dir, start=start, end=end, custom_zones_path=zones,
-        resting_only=args.resting_only, force_replot=args.force)
-    _log("BuzzPhono done -> %s  (%.0fs)" % (out, time.time() - t0))
-    return 0
-
-
-# ----------------------------------------------------------------- phono-flight
-def cmd_phono_flight(args):
-    _, exp_dir = _resolve_experiment(args.experiment, need_json=False)
-    from buzzphono_legacy.flight_phonotaxis import FlightPhonotaxisError, run_flight_phonotaxis
-    last = [-1.0]
-
-    def progress(frac, msg):
-        if frac - last[0] >= 0.05 or frac >= 1.0:
-            last[0] = frac
-            _log("  %3.0f%%  %s" % (100 * frac, msg))
-    _log("Experiment : %s" % exp_dir)
+    if getattr(args, "zones", None):
+        _log("Note: --zones is no longer used; BuzzPhono reads <exp>/buzzphono_calibration.json "
+             "(or imports custom_zones.json). Use `buzzphono calibrate` to change zones.")
+    fd, cfg = tempfile.mkstemp(prefix="buzzphono_", suffix=".yml")
+    os.close(fd)
+    bb.write_settings(cfg, exp_dir, on=(args.on_start, args.on_end), off=(args.off_start, args.off_end),
+                      start=args.start, end=args.end, analyses=analyses, light_hours=light_hours,
+                      workers=getattr(args, "workers", None), extra=extra)
+    cmd = ["analyse", "--config", cfg]
+    if getattr(args, "out", None):
+        cmd += ["--out", args.out]
+    _log("Experiment : %s  (BuzzPhono: %s)" % (exp_dir, ", ".join(analyses)))
     t0 = time.time()
     try:
-        r = run_flight_phonotaxis(
-            exp_dir, zones_file=args.zones, out_dir=args.out, start=args.start, end=args.end,
-            on=(args.on_start, args.on_end), off=(args.off_start, args.off_end),
-            light_hours=(args.light_start, args.light_end), flyer_mult=args.flyer_mult, min_median=args.min_median,
-            radius=args.radius, workers=args.workers, progress=progress, log=_log)
-    except FlightPhonotaxisError as exc:
+        code = bb.run(cmd, log=_log)
+    except bb.BuzzPhonoNotFound as exc:
         raise SystemExit(str(exc))
-    ck = r["clock"]
-    _log("Cycles     : %d (%d light, %d dark); clock %s" % (
-        r["n_cycles"], r["n_cycles_light"], r["n_cycles_dark"],
-        "calibrated, drift %.1f s/day" % ck["b"] if ck["fitted"] else "not enough bursts, using the nominal clock"))
-    _log("Flight phonotaxis done -> %s  (%.0fs)" % (r["out_dir"], time.time() - t0))
+    finally:
+        try:
+            os.remove(cfg)
+        except OSError:
+            pass
+    if code != 0:
+        raise SystemExit("BuzzPhono stopped with exit code %d (see the messages above)." % code)
+    _log("BuzzPhono done  (%.0fs)" % (time.time() - t0))
     return 0
+
+
+def cmd_phono(args):
+    """Speaker-zone resting fraction (and its companion analyses) with the new BuzzPhono."""
+    if getattr(args, "resting_only", False):
+        return _phono_forward(args, ["resting_fraction"])
+    return _phono_forward(args, ["resting_fraction", "attraction_index", "psth", "zt_profile", "reliability"])
+
+
+def cmd_phono_flight(args):
+    """Flight phonotaxis (arousal, take-offs, landings, wall preference) with the new BuzzPhono."""
+    extra = {"flight": {"flyer_multiplier": args.flyer_mult, "min_median": args.min_median,
+                        "radius_cage_widths": args.radius}}
+    return _phono_forward(args, ["flight"], light_hours=(args.light_start, args.light_end), extra=extra)
 
 
 # ----------------------------------------------------------------- convert

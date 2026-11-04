@@ -534,7 +534,7 @@ def mixed_model(
                 fit = model.fit(reml=True, method=method)
             except (ValueError, np.linalg.LinAlgError, OverflowError):
                 continue
-        se_try = float(fit.bse_fe["Intercept"])
+            se_try = float(fit.bse_fe["Intercept"])  # NaN (with a warning) when the Hessian is singular
         # A failed optimisation can "converge" with an absurd standard error; reject those.
         if not (fit.converged and np.isfinite(se_try) and se_try < 10.0):
             continue
@@ -547,8 +547,11 @@ def mixed_model(
         )
     fit = best
     est = float(fit.fe_params["Intercept"]) * scale
-    se = float(fit.bse_fe["Intercept"]) * scale
-    ci = fit.conf_int().loc["Intercept"] * scale
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # SEs of other terms can be NaN; not used
+        se = float(fit.bse_fe["Intercept"]) * scale
+        ci = fit.conf_int().loc["Intercept"] * scale
+        p_value = float(fit.pvalues["Intercept"])
     var_group = float(np.asarray(fit.cov_re)[0, 0]) if np.asarray(fit.cov_re).size else 0.0
     if vc is not None and len(fit.vcomp):
         var_group = float(fit.vcomp[0])
@@ -561,7 +564,7 @@ def mixed_model(
         se,
         float(ci.iloc[0]),
         float(ci.iloc[1]),
-        float(fit.pvalues["Intercept"]),
+        p_value,
         var_group,
         var_resid,
         bool(fit.converged),

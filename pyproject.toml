@@ -115,6 +115,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PTH", "PD", "B011"]
 "tools/pi_collect_logs.py" = ["UP", "PTH"]   # must run on the Pi's Python 3.9 with stdlib only
+# Typer declares options as argument defaults; user-facing messages read better unbroken
+"src/buzzphono/cli.py" = ["B008", "E501"]
+"src/buzzphono/validate.py" = ["E501"]
+"src/buzzphono/app/**/*.py" = ["E501"]
 
 # ------------------------------------------------------------------ mypy
 [tool.mypy]
