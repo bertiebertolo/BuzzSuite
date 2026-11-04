@@ -42,6 +42,14 @@ Analysis = Literal[
     "sensitivity",
     "flight",
 ]
+_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 _BAD_LABEL_CHARS = '/\\:*?"<>|'  # a label names folders, so no path separators or reserved characters
 _HHMM = re.compile(r"^(\d{1,2}):(\d{2})$")
 
@@ -126,6 +134,13 @@ class StimulusSettings(_Strict):
         a, b = self.on.as_tuple(), self.off.as_tuple()
         if a[0] < b[1] and b[0] < a[1]:
             raise ValueError(f"the ON window ({self.on}) and the OFF window ({self.off}) overlap")
+        for name, w in (("sham_on", self.sham_on), ("sham_off", self.sham_off)):
+            s = w.as_tuple()
+            if s[0] < a[1] and a[0] < s[1]:
+                raise ValueError(
+                    f"the {name} window ({w}) overlaps the tone (ON {self.on}): "
+                    "a sham must not contain the tone"
+                )
         return self
 
 
@@ -249,6 +264,8 @@ class ExperimentSpec(_Strict):
             raise ValueError(
                 f"'{v}' cannot be used as a label: use letters, digits, spaces, - or _ (it names folders)"
             )
+        if v is not None and v.strip().split(".")[0].upper() in _RESERVED_NAMES:
+            raise ValueError(f"'{v}' is a reserved device name on Windows and cannot name a folder")
         return v
 
     @model_validator(mode="after")

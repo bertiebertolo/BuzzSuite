@@ -202,6 +202,8 @@ def paired_comparison(
     ``a_col`` is the baseline (e.g. OFF) and ``b_col`` the test window (e.g. ON). Rows with a
     missing value in either column are dropped and counted.
     """
+    if not len(cycles) or a_col not in cycles or b_col not in cycles:
+        return pd.DataFrame([{"comparison": label, "baseline": a_col, "test": b_col, "phase": "all", "n": 0}])
     rows = []
     groups: list[tuple[str, pd.DataFrame]] = [("all", cycles)]
     if by_phase and "phase" in cycles and cycles["phase"].astype(bool).any():

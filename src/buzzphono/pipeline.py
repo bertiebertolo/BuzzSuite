@@ -78,7 +78,8 @@ def config_hash(config: AnalysisConfig) -> str:
 
 
 def default_run_dir(config: AnalysisConfig, now: datetime | None = None) -> Path:
-    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    moment = now or datetime.now()
+    stamp = moment.strftime("%Y%m%d-%H%M%S-") + f"{moment.microsecond // 1000:03d}"
     run_id = f"{stamp}-{config_hash(config)}"
     if config.output.dir is not None:
         return Path(config.output.dir) / run_id
@@ -152,6 +153,8 @@ def run(
     make_report: bool = True,
 ) -> RunResult:
     run_dir = run_dir or default_run_dir(config)
+    _refuse_inside_experiment(run_dir)
+    _refuse_same_data_twice(config)  # before anything is created
     claim_run_dir(run_dir)  # never write into an experiment folder, a foreign or a finished one
     result = RunResult(run_dir, config, [], started=datetime.now().isoformat(timespec="seconds"))
     steps = _Steps(progress, cancel, len(config.experiments) + 1)
@@ -159,9 +162,10 @@ def run(
     for i, spec in enumerate(config.experiments):
         steps.i = i
         label = spec.name
-        if label in labels:
+        # Windows folder names ignore case and trailing dots: compare labels the same way
+        if _folder_key(label) in labels:
             label = f"{label}_{i + 1}"
-        labels.add(label)
+        labels.add(_folder_key(label))
         with experiment_lock(cache_dir_for(spec.path, config.output.cache_dir)):
             exp = _run_experiment(config, spec, label, run_dir / "experiments" / label, steps, make_figures)
         result.experiments.append(exp)
@@ -296,6 +300,12 @@ def _run_experiment(
     good = cycles[cycles["usable"]] if len(cycles) else cycles
     if len(good) < 3:
         warnings.append(f"only {len(good)} usable hour-cycles: statistics need at least 3")
+    warnings += _colony_check(binned, config.metric.colony_size)
+    if spec.fps_from_settings() is None and _yml_states_fps(spec.path) and config.clock.fps is None:
+        warnings.append(
+            "buzzwatch_track_settings.yml states an fps that is not a valid number; 25 fps was used. "
+            "Set clock.fps to the camera's frame rate."
+        )
     ctx = _Ctx(
         config,
         layout,
@@ -312,7 +322,9 @@ def _run_experiment(
         steps.cancel,
         fps,
     )
-    analyses = list(dict.fromkeys(config.analyses))
+    analyses = list(dict.fromkeys(config.analyses)) if len(good) else []
+    if not len(good):
+        warnings.append("no usable hour-cycle: the analyses were not run (see the warnings above)")
     for k, name in enumerate(analyses):
         steps.check()
         ctx.say(k / max(len(analyses), 1), f"{label}: {name.replace('_', ' ')}")
@@ -322,7 +334,7 @@ def _run_experiment(
     if len(family):
         res.tables["multiplicity/secondary_family_F2"] = family
     _write(res.tables, out)
-    if figs:
+    if figs and len(good):
         from buzzphono.plotting.figures import experiment_figures
 
         res.figures = experiment_figures(res, ctx, config)
@@ -338,6 +350,62 @@ def _scheduled(config: AnalysisConfig, cycles: pd.DataFrame) -> pd.Series:
     on_min = cycles["hour"].astype(int) * 60 + config.stimulus.on.start_min
     inside = (on_min >= lo) & (on_min < hi) if lo <= hi else (on_min >= lo) | (on_min < hi)
     return inside
+
+
+def _refuse_inside_experiment(run_dir: Path) -> None:
+    """Results may sit in <experiment>/plots/buzzphono/, never directly in an experiment folder or in
+    one of its tracking folders."""
+    from buzzphono.jobs import EXPERIMENT_MARKERS
+
+    parent = run_dir.parent
+    in_tracking = any(p.name in EXPERIMENT_MARKERS for p in [run_dir, *run_dir.parents])
+    if in_tracking or any((parent / m).is_dir() for m in EXPERIMENT_MARKERS):
+        raise ConfigError(
+            f"The results folder {run_dir} would be inside an experiment's own folders.",
+            hint="Leave out --out (results go to <experiment>/plots/buzzphono/) or choose another folder.",
+        )
+
+
+def _folder_key(label: str) -> str:
+    return label.rstrip(". ").casefold()
+
+
+def _refuse_same_data_twice(config: AnalysisConfig) -> None:
+    """Two experiments with the same recording chunks are the same data (a copy, or another path
+    spelling such as a network share): counting both would double n."""
+    seen: dict[frozenset[str], str] = {}
+    for spec in config.experiments:
+        chunks = frozenset(c.chunk_id for c in discover(spec.path).chunks)
+        if not chunks:
+            continue
+        if chunks in seen:
+            raise ConfigError(
+                f"{spec.path} holds the same recordings as {seen[chunks]}: "
+                "the same data would be counted twice.",
+                hint="List each experiment once (a copy or another path to one folder is the same data).",
+            )
+        seen[chunks] = str(spec.path)
+
+
+def _colony_check(binned: Binned, colony: int) -> list[str]:
+    """Warn when resting detections per frame are far above the colony size (wrong colony_size)."""
+    frames = binned.rest_frames > 0
+    if not frames.any():
+        return []
+    per_frame = float(np.median(binned.raw_total[frames] / binned.rest_frames[frames]))
+    if per_frame > 2 * colony:
+        return [
+            f"Resting detections per frame (median {per_frame:.0f}) are far above the colony size "
+            f"({colony}): check metric.colony_size (the number of mosquitoes in the cage)."
+        ]
+    return []
+
+
+def _yml_states_fps(path: Path) -> bool:
+    try:
+        return "fps" in (path / "buzzwatch_track_settings.yml").read_text(encoding="utf-8")
+    except OSError:
+        return False
 
 
 def _spec_of(config: AnalysisConfig, layout: ExperimentLayout) -> ExperimentSpec:
@@ -826,6 +894,13 @@ def _pooled(config: AnalysisConfig, result: RunResult, say: Progress, figs: bool
             from buzzphono.metrics.reliability import reliability
 
             df = cycles.assign(delta=cycles["on_colony_frac_in_zone"] - cycles["off_colony_frac_in_zone"])
+            groups = {e.spec.group for e in exps}
+            if len(groups) > 1:
+                result.warnings.append(
+                    "Pooled reliability mixes experiments from different groups "
+                    f"({', '.join(sorted(str(g) for g in groups))}): its cage ICC and MDE mostly reflect the "
+                    "group difference. Use the per-experiment reliability tables instead."
+                )
             pooled["reliability_summary"], pooled["reliability_planning"] = reliability(
                 df, "delta", n_resamples=min(st.n_resamples, 999), seed=st.seed
             )

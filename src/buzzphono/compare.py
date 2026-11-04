@@ -46,9 +46,26 @@ def compare_runs(runs: list[Path], out: Path) -> list[Path]:
     rows = []
     cycles = []
     settings: dict[str, Any] = {}
+    seen_data: dict[frozenset[str], str] = {}
+    analysis_settings: dict[str, str] = {}
     for run in runs:
-        settings = settings or _manifest(run).get("settings", {})
+        manifest = _manifest(run)
+        settings = settings or manifest.get("settings", {})
+        s = {
+            k: v
+            for k, v in manifest.get("settings", {}).items()
+            if k not in ("experiments", "output", "workers")
+        }
+        analysis_settings[run.name] = json.dumps(s, sort_keys=True)
         for info, folder in _experiments(run):
+            chunks = frozenset(str(f.get("chunk")) for f in info.get("files", []))
+            if chunks and chunks in seen_data:
+                raise DataError(
+                    f"{run}/{info['label']} analyses the same recordings as {seen_data[chunks]}: "
+                    "pooling them would count the same data twice."
+                )
+            if chunks:
+                seen_data[chunks] = f"{run}/{info['label']}"
             meta = info.get("metadata", {})
             label = f"{run.name}/{info['label']}" if len(runs) > 1 else info["label"]
             st_path = folder / "resting_fraction" / "statistics.csv"
@@ -84,10 +101,13 @@ def compare_runs(runs: list[Path], out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     table = experiment_table(rows)
     written = []
-    tables: dict[str, pd.DataFrame] = {
-        "experiments": table,
-        "confounds": pd.DataFrame({"note": confounds(table)}),
-    }
+    notes = confounds(table)
+    if len(set(analysis_settings.values())) > 1:
+        notes.append(
+            "The runs used different analysis settings (windows, colony size, clock or statistics): "
+            "their effects are not directly comparable."
+        )
+    tables: dict[str, pd.DataFrame] = {"experiments": table, "confounds": pd.DataFrame({"note": notes})}
     contrasts = [
         group_contrast(table, d)
         for d in ("group", "frequency_hz", "species", "sex")

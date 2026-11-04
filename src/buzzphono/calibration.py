@@ -274,7 +274,7 @@ def import_existing(experiment_dir: Path, zones_file: Path | None = None) -> Cal
             notes=f"Imported from {zones_path.name} and {settings.name}.",
         )
     except ValidationError as exc:
-        raise ConfigError(plain_english(exc, f"the zones imported from {zones_path}")) from exc
+        raise CalibrationError(plain_english(exc, f"the zones imported from {zones_path}")) from exc
 
 
 # ------------------------------------------------------------------------- checks

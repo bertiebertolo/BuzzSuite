@@ -42,9 +42,9 @@ HEADERS = {
     "mean_off": "mean OFF",
     "mean_on": "mean ON",
     "mean_delta": "mean Δ",
-    "wild_cluster_ci_low": "95% CI low",
-    "wild_cluster_ci_high": "95% CI high",
-    "wild_cluster_p_value": "p (wild cluster)",
+    "wild_cluster_ci_low": "95% CI low (primary)",
+    "wild_cluster_ci_high": "95% CI high (primary)",
+    "wild_cluster_p_value": "p (primary)",
     "block_signflip_p_value": "p (block sign-flip)",
     "wilcoxon_p_value": "p (Wilcoxon)",
     "hodges_lehmann": "Hodges-Lehmann",
@@ -125,6 +125,10 @@ def _experiment(e: ExperimentResult, run_dir: Path) -> str:
                 f"(95% CI {lo:.4g} to {hi:.4g}, {_e(r.get('wild_cluster_method', ''))}). "
                 "Wording rule: docs/STATS_PLAN.md §8.</p>"
             )
+    if len(e.cycles) and "stimulus_status" in e.cycles:
+        counts = e.cycles["stimulus_status"].value_counts()
+        summary = ", ".join(f"{k}: {v}" for k, v in counts.items())
+        parts.append(f"<p>Tone schedule check (per hour-cycle): {_e(summary)}.</p>")
     for w in e.warnings:
         parts.append(f'<div class="warn">{_e(w)}</div>')
     for name, title in (

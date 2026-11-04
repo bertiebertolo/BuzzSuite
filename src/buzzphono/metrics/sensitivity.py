@@ -306,7 +306,9 @@ def run_sensitivity(
     block = table["p_block_signflip"].to_numpy(dtype=np.float64)
     p = np.where(np.isfinite(wild), wild, block)
     table["p_method"] = np.where(
-        np.isfinite(wild), "wild cluster", np.where(np.isfinite(block), "block sign-flip", "")
+        np.isfinite(wild),
+        "primary (wild cluster or CR2)",
+        np.where(np.isfinite(block), "block sign-flip", ""),
     )
     q = np.full(p.size, np.nan)
     fin = np.isfinite(p)

@@ -220,7 +220,17 @@ def experiment_lock(cache_dir: Path) -> Iterator[None]:
         )
     path = cache_dir / LOCK
     info = {"pid": os.getpid(), "started": _now(), "heartbeat": time.time()}
-    atomic_write_text(path, json.dumps(info))
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()  # stale (checked above): take it over
+    try:  # O_EXCL: of two runs starting at the same moment, only one creates the lock
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise DataError(
+            f"Another BuzzPhono run started on this experiment's cache ({cache_dir}) at the same moment.",
+            hint="Wait for it to finish, then try again.",
+        ) from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(info))
     stop = threading.Event()
 
     def beat() -> None:

@@ -106,7 +106,7 @@ def test_rerun_gives_identical_outputs(sim, result) -> None:
 
 def test_thesis_clock_mode_writes_the_published_tables(sim) -> None:
     res = pipeline.run(
-        _config(sim, analyses=["resting_fraction"], clock={"mode": "thesis", "fps": 25.0}),
+        _config(sim, analyses=["resting_fraction"], clock={"mode": "thesis", "fps": DESIGN.fps}),
         run_dir=sim / "out" / "thesis",
         make_figures=False,
     )
