@@ -87,6 +87,27 @@ def variance_components(y: np.ndarray, cage: np.ndarray, cage_day: np.ndarray) -
     return Components(var_c, var_d, max(ms_e, 0.0), n, b, a)
 
 
+def power_multiplier(df: float, alpha: float = 0.05, power: float = 0.8) -> float:
+    """k such that a true effect of k standard errors is detected with the given power by a
+    two-sided t-test on ``df`` degrees of freedom (noncentral t; about 2.8 when df is large)."""
+    from scipy.optimize import brentq
+
+    df = max(float(df), 1.0)
+    crit = sps.t.ppf(1 - alpha / 2, df)
+
+    def gap(k: float) -> float:
+        upper = float(sps.nct.sf(crit, df, k))
+        lower = float(np.nan_to_num(sps.nct.cdf(-crit, df, k)))  # negligible, and NaN, far from 0
+        return float(np.nan_to_num(upper, nan=1.0)) + lower - power
+
+    hi = 4.0
+    while gap(hi) < 0:  # widen the bracket step by step (the noncentral t is NaN far out)
+        hi *= 1.5
+        if hi > 1e4:
+            return float("inf")
+    return float(brentq(gap, 0.0, hi))
+
+
 def mde_from_components(
     comp: Components,
     n_cages: float,
@@ -95,10 +116,10 @@ def mde_from_components(
     alpha: float = 0.05,
     power: float = 0.8,
 ) -> float:
-    """Smallest true mean Δ detected with the given power (two-sided z approximation)."""
+    """Smallest true mean Δ detected with the given power by the primary test, whose degrees of
+    freedom are the number of cage-days − 1 (noncentral t)."""
     var_mean = comp.var_cage / n_cages + comp.var_cage_day / n_cage_days + comp.var_cycle / n_cycles
-    z = sps.norm.ppf(1 - alpha / 2) + sps.norm.ppf(power)
-    return float(z * np.sqrt(var_mean))
+    return float(power_multiplier(n_cage_days - 1, alpha, power) * np.sqrt(var_mean))
 
 
 def reliability(
@@ -147,7 +168,7 @@ def reliability(
         lo, hi = np.percentile(a, [2.5, 97.5])
         return float(lo), float(hi)
 
-    z = sps.norm.ppf(1 - alpha / 2) + sps.norm.ppf(power)
+    z = power_multiplier(comp.n_cage_days - 1, alpha, power) if comp.n_cage_days >= 2 else float("nan")
     se_boot = float(np.std(boot_mean, ddof=1)) if len(boot_mean) > 1 else float("nan")
     warnings_: list[str] = []
     if comp.n_cages < 5:

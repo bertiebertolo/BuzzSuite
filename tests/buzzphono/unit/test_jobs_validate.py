@@ -30,7 +30,7 @@ def test_job_status_events_cancel_and_cleanup(tmp_path) -> None:
     (run / "experiments").mkdir()
     (run / "report.html").write_text("x", encoding="utf-8")
     jobs.remove_partial_run(run)
-    assert sorted(p.name for p in run.iterdir()) == [jobs.EVENTS, jobs.STATUS]
+    assert sorted(p.name for p in run.iterdir()) == [jobs.CANCEL, jobs.EVENTS, jobs.STATUS]
     job.finish("failed", DataError("bad", hint="do this"), 4)
     st = jobs.read_status(run)
     assert st["state"] == "failed" and st["hint"] == "do this" and st["exit_code"] == 4
@@ -120,3 +120,24 @@ def test_validate_reports_a_resized_camera(exp, tmp_path) -> None:
         Image.new("L", (800, 600)).save(p)
     checks = validate_experiment(work)
     assert any(c.severity == "error" and "camera or its resolution changed" in c.message for c in checks)
+
+
+def test_runs_never_touch_an_experiment_or_foreign_folder(exp, tmp_path) -> None:
+    from buzzphono.errors import ConfigError
+
+    with pytest.raises(ConfigError, match="experiment folder"):
+        jobs.Job(exp)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "thesis.docx").write_text("precious", encoding="utf-8")
+    with pytest.raises(ConfigError, match="already holds other files"):
+        jobs.Job(other)
+    # clean-up removes only a run's own outputs, even if called on a folder with other files
+    (other / "experiments").mkdir()
+    jobs.remove_partial_run(other)
+    assert (other / "thesis.docx").read_text(encoding="utf-8") == "precious" and not (
+        other / "experiments"
+    ).exists()
+    before = sorted(p.name for p in exp.iterdir())
+    jobs.remove_partial_run(exp)
+    assert sorted(p.name for p in exp.iterdir()) == before

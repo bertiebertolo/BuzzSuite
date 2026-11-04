@@ -148,3 +148,22 @@ def test_zt_profile_and_minute_series() -> None:
     ms = minute_series(b, fps=FPS, windows=WINDOWS)
     assert len(ms) == 26 * 60 and set(ms["window"]) == {"", "on", "off"}
     assert np.allclose(ms.loc[ms["window"] == "on", "colony_frac_in_zone"], 0.6)
+
+
+def test_conclusion_wording_follows_the_plan() -> None:
+    from buzzphono.pipeline import conclusion
+
+    main = pd.Series(
+        {
+            "wild_cluster_ci_low": 0.01,
+            "wild_cluster_ci_high": 0.05,
+            "block_signflip_p_value": 0.01,
+            "wilcoxon_p_value": 0.001,
+            "mean_delta": 0.03,
+        }
+    )
+    assert conclusion(main, None) == "Evidence of an effect"
+    sham = pd.Series({"wild_cluster_ci_low": 0.01, "wild_cluster_ci_high": 0.04, "mean_delta": 0.025})
+    assert conclusion(main, sham).startswith("Suggestive")  # a comparable sham effect blocks "evidence"
+    weak = pd.Series({**main, "block_signflip_p_value": 0.3, "wilcoxon_p_value": 0.2})
+    assert conclusion(weak, None) == "No clear effect"

@@ -143,22 +143,33 @@ hours are correlated.
   - At ρ = 0.3: 4 h 0.057, 12 h 0.043.
   - For comparison at ρ = 0.6: the wild cluster bootstrap gave 0.057 and the per-cycle Wilcoxon
     test 0.29.
-- **2026-11-04 (later): fewer than 6 cage-days → t-test on cage-day means.**
+- **2026-11-04 (later): fewer than 6 cage-days → cluster-robust t-test (G − 1 df).**
   - **How it surfaced:** the first real-data runs had 2–3 cage-days per cage. Their wild cluster
     intervals looked implausibly narrow, which prompted a coverage check on simulated data. The
     change is a property of the method, not of any result: the simulator was the only evidence
     used.
-  - **Coverage of the 95% interval** (`synthetic.l1`, one cage, ρ = 0.3, 300 seeds):
+  - **Coverage of the 95% interval** (`synthetic.l1`, one cage, ρ = 0.3, 300–400 seeds,
+    unequal cage-day sizes):
 
-    | Cage-days | Wild cluster bootstrap-t | t-test on cage-day means (G − 1 df) |
+    | Cage-days | Wild cluster bootstrap-t | CR1 t-test, G − 1 df (adopted) |
     |---|---|---|
     | 2 | degenerate (unbounded width) | 0.95 |
     | 3 | 0.91 | 0.94 |
-    | 4 | 0.92 | 0.95 |
-    | 6 | 0.95 | 0.95 |
-    | 10 | 0.96 | 0.97 |
-  - **The change:** below 6 cage-days, `wild_cluster_bootstrap` returns the t-test on cage-day
-    means instead, with the method named in the output. The primary cluster-robust result
-    therefore stays honest for short single-cage experiments. At 6 or more cage-days nothing
-    changes.
-  - **Regression test:** `tests/buzzphono/stats/test_stats_methods.py::test_few_cage_days_use_the_cluster_means_t_interval`.
+    | 4 | 0.92 | 0.94 |
+    | 5 | – | 0.95 |
+    | 6 and more | 0.95–0.96 (kept) | – |
+  - **Estimate:** the CR1 t-test keeps the same estimate as everything else (the mean over
+    cycles). A t-test on cage-day means was tried first and dropped after review: it changes the
+    estimand, so the shown mean could fall outside its own interval.
+  - **Regression tests:** `test_stats_methods.py::test_few_cage_days_use_the_cluster_robust_t_interval`.
+- **2026-11-04 (review round 1): implementation brought into line with this plan.**
+  - Monte-Carlo p-values of the wild bootstrap are (k + 1)/(B + 1), so they are never 0.
+  - The block sign-flip test is exact up to 2^16 patterns, then uses 100,000, as §3 says.
+  - Blocks are anchored to the clock (00–12, 12–24).
+  - Phases are tested only with at least 4 cycles (§5).
+  - The mixed model includes the phase term (§3), and reports the cage variance when there are
+    at least 5 cages.
+  - The MDE uses the noncentral t with cage-days − 1 df. The old z version gave 0.41–0.62 power
+    at the reported MDE; the new one gives 0.73–0.80, at 4–8 cage-days.
+  - The experiment-level permutation test samples randomly when there are more than 200,000
+    splits.

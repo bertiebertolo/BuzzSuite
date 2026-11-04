@@ -11,6 +11,7 @@ Inputs are only read: nothing is ever written next to the tracking data except t
 from __future__ import annotations
 
 import hashlib
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,7 +29,7 @@ from buzzphono.io.cache import cache_dir_for
 from buzzphono.io.discover import ExperimentLayout, discover
 from buzzphono.io.ingest import IngestReport, ingest
 from buzzphono.io.playback_log import PlaybackLog, read_playback_log
-from buzzphono.jobs import experiment_lock
+from buzzphono.jobs import check_run_dir, experiment_lock
 from buzzphono.metrics import attraction_index as ai
 from buzzphono.metrics.cycles import (
     Coverage,
@@ -151,6 +152,7 @@ def run(
     make_report: bool = True,
 ) -> RunResult:
     run_dir = run_dir or default_run_dir(config)
+    check_run_dir(run_dir)  # never write into an experiment folder or a folder with other files
     run_dir.mkdir(parents=True, exist_ok=True)
     result = RunResult(run_dir, config, [], started=datetime.now().isoformat(timespec="seconds"))
     steps = _Steps(progress, cancel, len(config.experiments) + 1)
@@ -224,7 +226,11 @@ def _run_experiment(
     if speaker_name not in {z.name for z in cal.zones}:
         speaker_name = cal.speaker.name
     controls = [z.name for z in cal.controls if z.name != speaker_name]
-    zones = {"speaker": cal.polygon(speaker_name), **{c: cal.polygon(c) for c in controls}}
+    zones: dict[str, Any] = {"speaker": cal.polygon(speaker_name), **{c: cal.polygon(c) for c in controls}}
+    if "spatial" in config.analyses:
+        from buzzphono.metrics.sensitivity import grown_zone
+
+        zones[BAND_ZONE] = grown_zone(cal.polygon(speaker_name), BAND_PX)  # spatial F2 contrast (§5)
     binned = bin_experiment(
         layout,
         report.cache_dir,
@@ -299,6 +305,9 @@ def _run_experiment(
         ctx.say(k / max(len(analyses), 1), f"{label}: {name.replace('_', ' ')}")
         if name in ANALYSES:
             ANALYSES[name](ctx)
+    family = secondary_family(res.tables)
+    if len(family):
+        res.tables["multiplicity/secondary_family_F2"] = family
     _write(res.tables, out)
     if figs:
         from buzzphono.plotting.figures import experiment_figures
@@ -423,7 +432,7 @@ def _resting_fraction(ctx: _Ctx) -> None:
             )
         )
         rows.append(ctx.compare("delta_control", "delta_speaker", "speaker minus control zones (ON − OFF)"))
-    ctx.res.tables["resting_fraction/statistics"] = pd.concat(rows, ignore_index=True)
+    ctx.res.tables["resting_fraction/statistics"] = add_conclusions(pd.concat(rows, ignore_index=True))
     ctx.res.tables["resting_fraction/assumptions"] = assumptions_table()
     if ctx.config.clock.mode == "thesis":
         from buzzphono import thesis
@@ -476,6 +485,25 @@ def _psth(ctx: _Ctx) -> None:
         n_resamples=min(ctx.config.stats.n_resamples, 999),
         seed=ctx.config.stats.seed,
     )
+    # F2 contrast: speaker-zone fraction 0-5 min after the onset vs the 5 min before, per cycle
+    from buzzphono.metrics.psth import bin_quantities, event_matrix
+
+    values = bin_quantities(ctx.binned, ctx.config.clock.fps)["colony_frac_in_zone"]
+    onsets = ctx.good["cycle_start_ns"].to_numpy(dtype=np.int64) + on0 * 60 * 10**9
+    mat, rel = event_matrix(values, ctx.binned, onsets, 5, 5)
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        cyc = ctx.good.assign(
+            psth_pre_5min=np.nanmean(np.where(rel[None, :] < 0, mat, np.nan), axis=1),
+            psth_post_5min=np.nanmean(np.where(rel[None, :] >= 0, mat, np.nan), axis=1),
+        )
+    ctx.res.tables["psth/onset_response"] = ctx.compare(
+        "psth_pre_5min",
+        "psth_post_5min",
+        "PSTH onset response: 0-5 min after vs 5 min before",
+        data=cyc,
+        by_phase=False,
+    )
 
 
 def _zt(ctx: _Ctx) -> None:
@@ -509,6 +537,14 @@ def _spatial(ctx: _Ctx) -> None:
         ctx.layout, ctx.report.cache_dir, ctx.eclock, starts, w, seed=ctx.config.stats.seed
     )
     ctx.res.extras["maps"] = maps
+    band_on, band_off = f"on_colony_frac_in_zone__{BAND_ZONE}", f"off_colony_frac_in_zone__{BAND_ZONE}"
+    if band_on in ctx.good:
+        ctx.res.tables["spatial/band_statistics"] = ctx.compare(
+            band_off,
+            band_on,
+            f"fraction within {BAND_PX:g} px of the speaker zone: ON vs OFF",
+            by_phase=False,
+        )
 
 
 def _approach(ctx: _Ctx) -> None:
@@ -713,7 +749,7 @@ def _pooled(config: AnalysisConfig, result: RunResult, say: Progress, figs: bool
                 by_phase=False,
             ),
         ]
-        pooled["statistics"] = pd.concat(rows, ignore_index=True)
+        pooled["statistics"] = add_conclusions(pd.concat(rows, ignore_index=True))
         if "reliability" in config.analyses:
             from buzzphono.metrics.reliability import reliability
 
@@ -780,6 +816,86 @@ def manifest_inputs(result: RunResult) -> list[dict[str, Any]]:
                 "n_usable_cycles": int(e.cycles["usable"].sum()) if len(e.cycles) else 0,
             }
         )
+    return out
+
+
+# ----------------------------------------------------------------------------- plan §5 and §8
+BAND_ZONE = "speaker_band"
+BAND_PX = 20.0
+F2_SOURCES = (
+    ("attraction_index/statistics", "attraction index (vs 0)", None),
+    ("psth/onset_response", "PSTH onset response", None),
+    ("approach/statistics", "approach: directed (radial) velocity, ON vs OFF", "directed_velocity"),
+    ("spatial/band_statistics", "spatial: fraction in the speaker's 20-px band, ON vs OFF", None),
+)
+
+
+def secondary_family(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """F2 (docs/STATS_PLAN.md §5): Holm across the primary contrast of each secondary analysis run."""
+    rows = []
+    for key, label, contains in F2_SOURCES:
+        t = tables.get(key)
+        if t is None or not len(t) or "wild_cluster_p_value" not in t:
+            continue
+        sel = t[t["phase"] == "all"] if "phase" in t else t
+        if contains is not None:
+            sel = sel[sel["comparison"].str.contains(contains) & ~sel["comparison"].str.contains("sham")]
+        if not len(sel):
+            continue
+        r = sel.iloc[0]
+        rows.append(
+            {
+                "analysis": label,
+                "n": r.get("n", np.nan),
+                "mean_delta": r.get("mean_delta", np.nan),
+                "ci_low": r.get("wild_cluster_ci_low", np.nan),
+                "ci_high": r.get("wild_cluster_ci_high", np.nan),
+                "p_value": r.get("wild_cluster_p_value", np.nan),
+                "method": r.get("wild_cluster_method", ""),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if len(out):
+        p = out["p_value"].to_numpy(dtype=np.float64)
+        adj = np.full(p.size, np.nan)
+        fin = np.isfinite(p)
+        if fin.any():
+            from buzzphono.stats import holm
+
+            adj[fin] = holm(p[fin])
+        out["p_holm_F2"] = adj
+    return out
+
+
+def conclusion(main: pd.Series, sham: pd.Series | None, alpha: float = 0.05) -> str:
+    """The plan's wording (§8): evidence / suggestive / no clear effect."""
+    lo, hi = main.get("wild_cluster_ci_low", np.nan), main.get("wild_cluster_ci_high", np.nan)
+    block_p = main.get("block_signflip_p_value", np.nan)
+    wil_p = main.get("wilcoxon_p_value", np.nan)
+    excludes_zero = bool(np.isfinite(lo) and np.isfinite(hi) and (lo > 0 or hi < 0))
+    sham_ok = True
+    if sham is not None:
+        s_lo, s_hi = sham.get("wild_cluster_ci_low", np.nan), sham.get("wild_cluster_ci_high", np.nan)
+        sham_excl = bool(np.isfinite(s_lo) and np.isfinite(s_hi) and (s_lo > 0 or s_hi < 0))
+        comparable = abs(float(sham.get("mean_delta", 0.0))) >= 0.5 * abs(float(main.get("mean_delta", 0.0)))
+        sham_ok = not (sham_excl and comparable)
+    if excludes_zero and np.isfinite(block_p) and block_p < alpha and sham_ok:
+        return "Evidence of an effect"
+    if np.isfinite(wil_p) and wil_p < alpha:
+        return "Suggestive (per-cycle Wilcoxon only)"
+    return "No clear effect"
+
+
+def add_conclusions(stats: pd.DataFrame) -> pd.DataFrame:
+    """A ``conclusion`` column on the headline rows (ON vs OFF, each phase), judged against the sham."""
+    out = stats.copy()
+    out["conclusion"] = ""
+    main = out["comparison"].isin(["ON vs OFF (speaker zone)", "ON vs OFF (all experiments)"])
+    sham = out["comparison"].str.startswith("sham")
+    sham_all = out[sham & (out["phase"] == "all")]
+    sham_row = sham_all.iloc[0] if len(sham_all) else None
+    for i in out.index[main]:
+        out.loc[i, "conclusion"] = conclusion(out.loc[i], sham_row)
     return out
 
 

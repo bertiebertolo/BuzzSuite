@@ -157,8 +157,8 @@ def test_summarise_paired_runs_everything() -> None:
     assert s["wild_cluster"].n_clusters == 6
 
 
-def test_few_cage_days_use_the_cluster_means_t_interval() -> None:
-    """With < 6 cage-days the wild bootstrap interval under-covers; the t-test on cage-day means does not."""
+def test_few_cage_days_use_the_cluster_robust_t_interval() -> None:
+    """With < 6 cage-days the wild bootstrap interval under-covers; the cluster-robust t does not."""
     from buzzphono.stats import MIN_WILD_CLUSTERS, wild_cluster_bootstrap
     from buzzphono.synthetic.l1 import L1Design, simulate_cycles
 
@@ -169,6 +169,17 @@ def test_few_cage_days_use_the_cluster_means_t_interval() -> None:
         d = (df["on"] - df["off"]).to_numpy()
         r = wild_cluster_bootstrap(d, df["cage_day"].to_numpy(), n_resamples=199)
         covered += r.ci_low <= df["true_effect"].mean() <= r.ci_high
+        assert r.ci_low <= d.mean() <= r.ci_high and r.mean == pytest.approx(d.mean())  # same estimand
     assert covered / reps >= 0.92
-    assert r.method.startswith("t-test on cage-day means") and r.n_clusters == 3 < MIN_WILD_CLUSTERS
+    assert r.method.startswith("cluster-robust t-test") and r.n_clusters == 3 < MIN_WILD_CLUSTERS
     assert "cage-days" in r.warnings[0]
+
+
+def test_monte_carlo_p_values_are_never_zero() -> None:
+    from buzzphono.stats import wild_cluster_bootstrap
+
+    rng = np.random.default_rng(0)
+    cl = np.repeat(np.arange(10), 12)
+    d = 1.0 + rng.normal(0, 0.1, cl.size)  # an overwhelming effect over 10 cage-days (random draws)
+    r = wild_cluster_bootstrap(d, cl, n_resamples=999)
+    assert r.p_value == pytest.approx(1 / 1000)

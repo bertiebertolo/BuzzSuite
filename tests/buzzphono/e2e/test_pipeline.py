@@ -72,6 +72,11 @@ def test_every_analysis_writes_its_tables(result) -> None:
     sham = st[(st["comparison"].str.startswith("sham")) & (st["phase"] == "all")].iloc[0]
     assert main["mean_delta"] > 0 and main["wilcoxon_p_value"] < 0.01
     assert abs(sham["mean_delta"]) < main["mean_delta"] / 2
+    assert main["conclusion"].startswith("Suggestive")  # 2 cage-days: block test cannot reach p < 0.05
+    assert main["wild_cluster_ci_low"] <= main["mean_delta"] <= main["wild_cluster_ci_high"]
+    f2 = e.tables["multiplicity/secondary_family_F2"]
+    assert len(f2) == 4 and (f2["p_holm_F2"] >= f2["p_value"]).all()
+    assert "psth/onset_response" in e.tables and "spatial/band_statistics" in e.tables
 
 
 def test_figures_report_and_manifest(result) -> None:

@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from buzzphono.errors import BuzzPhonoError, DataError
+from buzzphono.errors import BuzzPhonoError, ConfigError, DataError
 from buzzphono.io.cache import atomic_write_text
 
 STATUS = "status.json"
@@ -48,6 +48,7 @@ class Job:
         self.run_dir = run_dir
         self.min_interval_s = min_interval_s
         self._last = 0.0
+        check_run_dir(run_dir)
         self.status: dict[str, Any] = {
             "state": "running",
             "progress": 0.0,
@@ -105,16 +106,47 @@ def read_status(run_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+# Everything a run writes into its folder. Clean-up deletes only these, never anything else.
+RUN_OUTPUTS = ("experiments", "pooled", "report.html", "report.pdf", "run_manifest.json")
+RUN_FILES = (STATUS, EVENTS, CANCEL, "settings.yml", "process.log", *RUN_OUTPUTS)
+EXPERIMENT_MARKERS = ("tracking_resting", "tracking_moving", "final_tracking_data", "individual_images")
+
+
+def check_run_dir(run_dir: Path) -> None:
+    """Refuse a results folder that is (or holds) anything other than a BuzzPhono run.
+
+    Results must never be written into, or cleaned out of, an experiment folder or any folder with
+    other files in it.
+    """
+    if not run_dir.exists():
+        return
+    if not run_dir.is_dir():
+        raise ConfigError(f"The results folder {run_dir} is a file.")
+    if any((run_dir / m).exists() for m in EXPERIMENT_MARKERS):
+        raise ConfigError(
+            f"{run_dir} is an experiment folder; results cannot go there.",
+            hint="Leave out --run-dir (results then go to <experiment>/plots/buzzphono/) "
+            "or choose an empty folder.",
+        )
+    foreign = sorted(p.name for p in run_dir.iterdir() if p.name not in RUN_FILES)
+    if foreign:
+        raise ConfigError(
+            f"The results folder {run_dir} already holds other files ({', '.join(foreign[:5])}"
+            f"{' ...' if len(foreign) > 5 else ''}).",
+            hint="Choose a new or empty folder for the results.",
+        )
+
+
 def remove_partial_run(run_dir: Path) -> None:
-    """Delete a cancelled or failed run's outputs, keeping status.json and events.jsonl as the record."""
+    """Delete a cancelled or failed run's own outputs (see RUN_OUTPUTS), keeping status.json and
+    events.jsonl as the record. Nothing else in the folder is ever touched."""
     if not run_dir.is_dir():
         return
-    for p in run_dir.iterdir():
-        if p.name in (STATUS, EVENTS):
-            continue
-        if p.is_dir():
+    for name in RUN_OUTPUTS:
+        p = run_dir / name
+        if p.is_dir() and not p.is_symlink():
             shutil.rmtree(p, ignore_errors=True)
-        else:
+        elif p.exists():
             p.unlink(missing_ok=True)
 
 

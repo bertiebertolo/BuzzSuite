@@ -274,6 +274,7 @@ def benjamini_hochberg(p: np.ndarray) -> np.ndarray:
 # 12-hour blocks keep the block test at its nominal level with hour-to-hour correlation up to
 # rho = 0.6 in simulation; 4-hour blocks reached a false-positive rate of 0.11 (docs/STATS_PLAN.md).
 DEFAULT_BLOCK_HOURS = 12
+BLOCK_TEST_RESAMPLES = 100_000  # the plan: every sign pattern up to 2^16, else 100,000 random ones
 
 
 def blocks_within_clusters(
@@ -361,17 +362,17 @@ def _cr1_se(cluster_resid_sums: np.ndarray, n: int, g: int) -> np.ndarray:
 MIN_WILD_CLUSTERS = 6  # below this the wild bootstrap interval under-covers (docs/STATS_PLAN.md, Changes)
 
 
-def _cluster_means_t(
+def _cluster_robust_t(
     d: np.ndarray, inv: np.ndarray, g: int, level: float, alternative: Alternative
 ) -> ClusterBootstrapResult:
-    """One-sample t-test on the cluster means (g − 1 degrees of freedom): exact coverage with few
-    clusters when the cluster means are roughly normal. Used instead of the wild bootstrap below
-    :data:`MIN_WILD_CLUSTERS` clusters."""
+    """Cluster-robust (CR1) t-test of the mean with g − 1 degrees of freedom. Used instead of the
+    wild bootstrap below :data:`MIN_WILD_CLUSTERS` clusters: same estimate (the mean over cycles),
+    honest coverage with very few clusters (docs/STATS_PLAN.md, Changes)."""
     from scipy import stats as sps
 
-    means = np.bincount(inv, weights=d, minlength=g) / np.bincount(inv, minlength=g)
-    m = float(means.mean())
-    se = float(means.std(ddof=1) / np.sqrt(g))
+    n = d.size
+    m = float(d.mean())
+    se = float(_cr1_se(np.bincount(inv, weights=d - m, minlength=g), n, g))
     q = float(sps.t.ppf(1 - (1 - level) / 2, g - 1))
     if se > 0:
         tstat = m / se
@@ -384,11 +385,11 @@ def _cluster_means_t(
     else:
         p = float("nan")
     note = (
-        f"only {g} cage-days: t-test on the {g} cage-day means instead of the wild bootstrap "
-        "(its interval is too narrow with so few units); the estimate is the mean of cage-day means"
+        f"only {g} cage-days: cluster-robust t-test ({g - 1} df) instead of the wild bootstrap, whose "
+        "interval is too narrow with so few units"
     )
     return ClusterBootstrapResult(
-        m, se, m - q * se, m + q * se, p, g, 0, f"t-test on cage-day means ({g - 1} df)", (note,)
+        m, se, m - q * se, m + q * se, p, g, 0, f"cluster-robust t-test ({g - 1} df)", (note,)
     )
 
 
@@ -419,7 +420,7 @@ def wild_cluster_bootstrap(
             float(d.mean()) if n else nan, nan, nan, nan, nan, g, 0, "undefined: needs at least 2 clusters"
         )
     if g < MIN_WILD_CLUSTERS:
-        return _cluster_means_t(d, inv, g, level, alternative)
+        return _cluster_robust_t(d, inv, g, level, alternative)
     if g < 10:
         notes.append(f"only {g} independent units (cage-days): the interval is approximate")
     sizes = np.bincount(inv, minlength=g).astype(np.float64)
@@ -430,10 +431,12 @@ def wild_cluster_bootstrap(
     if 6**g <= 50_000:
         grid = np.array(np.meshgrid(*[_WEBB] * g, indexing="ij")).reshape(g, -1).T
         method = "wild cluster bootstrap-t (Webb weights, all patterns)"
+        enumerated = True
     else:
         rng = np.random.default_rng(seed)
         grid = rng.choice(_WEBB, size=(n_resamples, g))
         method = "wild cluster bootstrap-t (Webb weights)"
+        enumerated = False
     # restricted (null imposed): residuals are d itself
     s_star = grid * sums[None, :]
     m_star = s_star.sum(axis=1) / n
@@ -445,11 +448,13 @@ def wild_cluster_bootstrap(
     with np.errstate(divide="ignore", invalid="ignore"):
         t_null = np.where(se_star > 0, m_star / se_star, 0.0)
     if alternative == "two-sided":
-        p = float(np.mean(np.abs(t_null) >= abs(t_obs)))
+        hits = np.abs(t_null) >= abs(t_obs)
     elif alternative == "greater":
-        p = float(np.mean(t_null >= t_obs))
+        hits = t_null >= t_obs
     else:
-        p = float(np.mean(t_null <= t_obs))
+        hits = t_null <= t_obs
+    # every pattern enumerated: the observed one is among them; random draws: count it, (k+1)/(B+1)
+    p = float(hits.mean()) if enumerated else float((hits.sum() + 1) / (hits.size + 1))
     # unrestricted, for the interval
     e_star = grid * resid_sums[None, :]
     m_dev = e_star.sum(axis=1) / n
@@ -518,6 +523,7 @@ class MixedModelResult:
     singular: bool
     formula: str
     messages: tuple[str, ...] = ()
+    var_cage: float = float("nan")  # only when cages enter as a variance component (>= 5 cages)
 
 
 def mixed_model(
@@ -589,7 +595,9 @@ def mixed_model(
         ci = fit.conf_int().loc["Intercept"] * scale
         p_value = float(fit.pvalues["Intercept"])
     var_group = float(np.asarray(fit.cov_re)[0, 0]) if np.asarray(fit.cov_re).size else 0.0
+    var_cage = float("nan")
     if vc is not None and len(fit.vcomp):
+        var_cage = var_group * scale**2  # groups are cages here; cage-days are the variance component
         var_group = float(fit.vcomp[0])
     var_group *= scale**2
     var_resid = float(fit.scale) * scale**2
@@ -607,6 +615,7 @@ def mixed_model(
         bool(singular),
         formula,
         tuple(messages),
+        var_cage,
     )
 
 
@@ -623,8 +632,13 @@ def summarise_paired(
     n_resamples: int = 9_999,
     seed: int = 20261104,
     with_mixed_model: bool = True,
+    hour_of_day: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Every pre-registered test and effect size for one ON/OFF comparison (docs/STATS_PLAN.md)."""
+    """Every pre-registered test and effect size for one ON/OFF comparison (docs/STATS_PLAN.md).
+
+    ``hour_of_day`` (clock hour 0-23) anchors the permutation blocks to the clock (00-12, 12-24 for
+    12-h blocks); without it blocks start at each cage-day's first recorded hour.
+    """
     off = np.asarray(off, dtype=np.float64)
     on = np.asarray(on, dtype=np.float64)
     d = on - off
@@ -632,11 +646,16 @@ def summarise_paired(
     cd = np.asarray(cage_day)[ok]
     hi = np.asarray(hour_index)[ok]
     dd = d[ok]
-    blocks = blocks_within_clusters(cd, hi, block_hours) if dd.size else np.empty(0, dtype=int)
+    anchor = np.asarray(hour_of_day)[ok] if hour_of_day is not None else hi
+    blocks = blocks_within_clusters(cd, anchor, block_hours) if dd.size else np.empty(0, dtype=int)
     out: dict[str, Any] = {"effect": paired_effect_sizes(off[ok], on[ok])}
     out["wilcoxon"] = wilcoxon_signed_rank(dd, alternative)
     out["block_signflip"] = block_signflip_test(
-        dd, blocks, alternative, n_resamples=max(n_resamples, 9_999), seed=seed
+        dd,
+        blocks,
+        alternative,
+        n_resamples=BLOCK_TEST_RESAMPLES,
+        seed=seed,  # exact up to 16 blocks
     )
     out["wild_cluster"] = wild_cluster_bootstrap(
         dd, cd, alternative=alternative, n_resamples=n_resamples, seed=seed

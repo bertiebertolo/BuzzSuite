@@ -29,6 +29,7 @@ from buzzphono.timebase import NS_PER_HOUR, NS_PER_MIN, NS_PER_S, from_ns
 
 METRICS = ("colony_frac_in_zone", "resting_frac_in_zone", "mean_frame_frac", "in_zone_per_frame")
 EXCLUDED_STIMULUS = ("failed", "not played")
+MIN_PHASE_CYCLES = 4  # a phase is tested only with at least 4 cycles (docs/STATS_PLAN.md §5)
 
 
 @dataclass(frozen=True)
@@ -214,19 +215,21 @@ def paired_comparison(
             "n_cages": int(df.loc[finite, "cage"].nunique()) if len(df) else 0,
             "n_cage_days": int(df.loc[finite, "cage_day"].nunique()) if len(df) else 0,
         }
-        if finite.sum() >= 2:
+        min_cycles = 2 if group == "all" else MIN_PHASE_CYCLES
+        if finite.sum() >= min_cycles:
             summary = summarise_paired(
                 a[finite],
                 b[finite],
                 df["cage_day"].to_numpy()[finite],
                 df["hour_index"].to_numpy()[finite],
                 cage=df["cage"].to_numpy()[finite] if len(set(df["cage"])) > 1 else None,
-                phase=None,
+                phase=df["phase"].to_numpy()[finite] if group == "all" and "phase" in df else None,
                 alternative=alternative,
                 block_hours=block_hours,
                 n_resamples=n_resamples,
                 seed=seed,
                 with_mixed_model=bool(with_mixed_model and finite.sum() >= 6),
+                hour_of_day=df["hour"].to_numpy()[finite] if "hour" in df else None,
             )
             row.update(flatten_summary(summary))
         rows.append(row)

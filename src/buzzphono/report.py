@@ -112,6 +112,19 @@ def _experiment(e: ExperimentResult, run_dir: Path) -> str:
         f"<p>Hour-cycles: {len(e.cycles)} with data, {n_usable} usable "
         "(coverage rule passed, tone not known to have failed).</p>"
     )
+    st = e.tables.get("resting_fraction/statistics")
+    if st is not None and "conclusion" in st:
+        head = st[(st["comparison"] == "ON vs OFF (speaker zone)") & (st["phase"] == "all")]
+        if len(head):
+            r = head.iloc[0]
+            nan = float("nan")
+            est = r.get("mean_delta", nan)
+            lo, hi = r.get("wild_cluster_ci_low", nan), r.get("wild_cluster_ci_high", nan)
+            parts.append(
+                f"<p><b>Conclusion: {_e(r['conclusion'])}</b> — ON − OFF {est:.4g} "
+                f"(95% CI {lo:.4g} to {hi:.4g}, {_e(r.get('wild_cluster_method', ''))}). "
+                "Wording rule: docs/STATS_PLAN.md §8.</p>"
+            )
     for w in e.warnings:
         parts.append(f'<div class="warn">{_e(w)}</div>')
     for name, title in (
@@ -119,6 +132,7 @@ def _experiment(e: ExperimentResult, run_dir: Path) -> str:
         ("attraction_index/statistics", "Attraction index"),
         ("approach/statistics", "Directed flight (approach)"),
         ("reliability/summary", "Reliability"),
+        ("multiplicity/secondary_family_F2", "Secondary analyses (Holm across the family, plan §5 F2)"),
     ):
         t = e.tables.get(name)
         if t is not None and len(t):

@@ -99,18 +99,22 @@ def group_contrast(df: pd.DataFrame, by: str, value: str = "mean_delta") -> pd.D
     return pd.DataFrame(rows)
 
 
-def _perm_p(xa: np.ndarray, xb: np.ndarray) -> float:
+def _perm_p(xa: np.ndarray, xb: np.ndarray, max_exact: int = 200_000, seed: int = 20261104) -> float:
+    """Two-sided permutation p of the difference in means: every split when there are at most
+    ``max_exact``, otherwise that many random splits (the observed one counted, (k+1)/(B+1))."""
+    import math
+
     pooled = np.concatenate([xa, xb])
     n, na = pooled.size, xa.size
-    observed = abs(xb.mean() - xa.mean())
+    observed = abs(xb.mean() - xa.mean()) - 1e-12
     total = pooled.sum()
-    count = 0
-    n_perm = 0
-    for idx in itertools.combinations(range(n), na):
-        sa = pooled[list(idx)].sum()
-        diff = abs((total - sa) / (n - na) - sa / na)
-        count += diff >= observed - 1e-12
-        n_perm += 1
-        if n_perm > 200_000:  # far beyond any realistic number of experiments
-            break
-    return count / n_perm
+
+    def diff(sa: np.ndarray | float) -> np.ndarray:
+        return np.abs((total - np.asarray(sa)) / (n - na) - np.asarray(sa) / na)
+
+    if math.comb(n, na) <= max_exact:
+        sums = np.array([pooled[list(idx)].sum() for idx in itertools.combinations(range(n), na)])
+        return float(np.mean(diff(sums) >= observed))
+    rng = np.random.default_rng(seed)
+    sums = np.array([pooled[rng.permutation(n)[:na]].sum() for _ in range(max_exact)])
+    return float((np.sum(diff(sums) >= observed) + 1) / (max_exact + 1))
