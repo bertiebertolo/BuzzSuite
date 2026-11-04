@@ -220,33 +220,54 @@ def import_existing(experiment_dir: Path, zones_file: Path | None = None) -> Cal
         )
     width, height = image_size(ref)
     zones_path = zones_file or experiment_dir / "custom_zones.json"
+    fix = "Redraw it with `buzzphono calibrate` or the app's Calibrate page."
     try:
         raw = json.loads(zones_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise CalibrationError(
             f"No zone file at {zones_path}.", hint="Draw the speaker zone with `buzzphono calibrate --click`."
         ) from exc
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise CalibrationError(f"{zones_path} is not valid JSON ({exc}).", hint=fix) from exc
+    if not isinstance(raw, dict):
+        raise CalibrationError(
+            f"{zones_path} must map zone names to polygons, not hold a {type(raw).__name__}.", hint=fix
+        )
     zones = []
     for name, spec in raw.items():
         vertices = spec.get("polygon") if isinstance(spec, dict) else spec
-        if not isinstance(vertices, list) or len(vertices) < 3:
-            continue
+        if not isinstance(vertices, list):
+            continue  # not a zone (e.g. metadata)
+        if len(vertices) < 3:
+            raise CalibrationError(
+                f"Zone '{name}' in {zones_path} needs a polygon of at least 3 [x, y] points.", hint=fix
+            )
+        try:
+            pts = [(float(x), float(y)) for x, y in vertices]
+        except (TypeError, ValueError) as exc:
+            raise CalibrationError(
+                f"Zone '{name}' in {zones_path}: every point must be [x, y] numbers.", hint=fix
+            ) from exc
         # feeders and other landmarks attract mosquitoes for their own reasons: not neutral controls
         role = "speaker" if name == "speaker" else ("other" if "feeder" in name.lower() else "control")
-        zones.append(Zone(name=name, role=role, polygon=[(float(x), float(y)) for x, y in vertices]))
+        try:
+            zones.append(Zone(name=name, role=role, polygon=pts))
+        except ValidationError as exc:
+            raise CalibrationError(plain_english(exc, f"zone '{name}' in {zones_path}"), hint=fix) from exc
     settings = experiment_dir / "buzzwatch_track_settings.yml"
     try:
         cage = yaml.safe_load(settings.read_text(encoding="utf-8"))["cage_border_points"]
-    except (FileNotFoundError, KeyError, TypeError) as exc:
+        cage_pts = [(float(x), float(y)) for x, y in cage]
+    except (FileNotFoundError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
         raise CalibrationError(
-            f"No cage corners (cage_border_points) in {settings}.",
+            f"No readable cage corners (cage_border_points) in {settings}.",
             hint="Draw the cage with `buzzphono calibrate --click`.",
         ) from exc
     try:
         return Calibration(
             frame_width_px=width,
             frame_height_px=height,
-            cage=[(float(x), float(y)) for x, y in cage],
+            cage=cage_pts,
             zones=zones,
             reference_image=str(ref.relative_to(experiment_dir)).replace("\\", "/"),
             reference_sha256=sha256_of(ref),

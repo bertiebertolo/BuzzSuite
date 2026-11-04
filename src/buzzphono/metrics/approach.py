@@ -46,8 +46,8 @@ from buzzphono.timebase import NS_PER_S
 # flight-second rose during the tone with a null sham. Approaches to the other walls are not
 # compared, so a general rise in tortuous flight is not excluded.
 VALIDATION: dict[str, str] = {
-    "radial_velocity": "not validated (failed the Aedes positive control)",
-    "approach_bouts": "passed the Aedes positive control (ON > OFF, sham null)",
+    "radial_velocity": "measure not validated (it failed the Aedes positive control)",
+    "approach_bouts": "measure validated on the Aedes positive control (says nothing about this result)",
 }
 
 

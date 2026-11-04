@@ -42,6 +42,7 @@ Analysis = Literal[
     "sensitivity",
     "flight",
 ]
+_BAD_LABEL_CHARS = '/\\:*?"<>|'  # a label names folders, so no path separators or reserved characters
 _HHMM = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 
@@ -108,6 +109,18 @@ class StimulusSettings(_Strict):
         _hhmm_to_min(v)
         return v
 
+    @model_validator(mode="before")
+    @classmethod
+    def _yaml_booleans(cls, value: Any) -> Any:
+        # YAML 1.1 reads the bare keys `on:` and `off:` as true and false
+        if isinstance(value, dict) and (True in value or False in value):
+            value = dict(value)
+            if True in value:
+                value["on"] = value.pop(True)
+            if False in value:
+                value["off"] = value.pop(False)
+        return value
+
     @model_validator(mode="after")
     def _no_overlap(self) -> StimulusSettings:
         a, b = self.on.as_tuple(), self.off.as_tuple()
@@ -118,7 +131,12 @@ class StimulusSettings(_Strict):
 
 class ClockSettings(_Strict):
     mode: Literal["corrected", "thesis", "nominal"] = "corrected"
-    fps: float = Field(default=25.0, gt=0, le=240, description="nominal camera frame rate, frames/s")
+    fps: float | None = Field(
+        default=None,
+        gt=0,
+        le=240,
+        description="camera frame rate, frames/s; default: read from the experiment",
+    )
     rig_drift_s_per_day: float | None = Field(default=None, ge=-300, le=300)
     manual_offset_s: dict[str, float] = Field(default_factory=dict, description="per session, seconds")
 
@@ -224,6 +242,15 @@ class ExperimentSpec(_Strict):
             raise ValueError(f"folder not found: {v}")
         return v
 
+    @field_validator("label")
+    @classmethod
+    def _safe_label(cls, v: str | None) -> str | None:
+        if v is not None and (not v.strip() or v.strip(". ") == "" or any(c in v for c in _BAD_LABEL_CHARS)):
+            raise ValueError(
+                f"'{v}' cannot be used as a label: use letters, digits, spaces, - or _ (it names folders)"
+            )
+        return v
+
     @model_validator(mode="after")
     def _window(self) -> ExperimentSpec:
         if self.start and self.end and self.end <= self.start:
@@ -233,6 +260,18 @@ class ExperimentSpec(_Strict):
     @property
     def name(self) -> str:
         return self.label or self.path.name
+
+    def fps_from_settings(self) -> float | None:
+        """The frame rate in the experiment's buzzwatch_track_settings.yml, if it states one."""
+        import yaml
+
+        try:
+            data = yaml.safe_load((self.path / "buzzwatch_track_settings.yml").read_text(encoding="utf-8"))
+            raw = data.get("fps") if isinstance(data, dict) else None
+            fps = float(raw) if raw is not None else None
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
+            return None
+        return fps if fps and 0 < fps <= 240 else None
 
 
 def _default_analyses() -> list[Analysis]:
@@ -253,10 +292,34 @@ class AnalysisConfig(_Strict):
     output: OutputSettings = OutputSettings()
     workers: int | None = Field(default=None, ge=1, le=61)
 
+    @field_validator("analyses", mode="before")
+    @classmethod
+    def _all(cls, v: Any) -> Any:
+        if v == "all" or v == ["all"]:
+            return list(ANALYSES)
+        return v
+
     @field_validator("analyses")
     @classmethod
     def _unique(cls, v: list[str]) -> list[str]:
         return list(dict.fromkeys(v))
+
+    @model_validator(mode="after")
+    def _distinct_experiments(self) -> AnalysisConfig:
+        seen: dict[Path, int] = {}
+        for i, e in enumerate(self.experiments):
+            key = e.path.resolve()
+            if key in seen:
+                raise ValueError(
+                    f"experiment {i + 1} is the same folder as experiment {seen[key] + 1} ({e.path}): "
+                    "it would be counted twice"
+                )
+            seen[key] = i
+        return self
+
+    def fps_for(self, spec: ExperimentSpec) -> float:
+        """Frame rate for one experiment: the setting if given, else the experiment's own, else 25."""
+        return self.clock.fps or spec.fps_from_settings() or 25.0
 
 
 # ------------------------------------------------------------------------- errors in plain English

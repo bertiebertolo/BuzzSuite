@@ -205,18 +205,20 @@ def _run_experiment(
     )
     warnings += _ingest_warnings(report)
     windows = windows_of(config)
+    fps = config.fps_for(spec)
     eclock = experiment_clock(
         layout,
         report.cache_dir,
         mode=config.clock.mode,
         cage=cal.cage_polygon(),
-        fps=config.clock.fps,
+        fps=fps,
         on_start_min=config.stimulus.on.start_min,
         rig_drift_s_per_day=config.clock.rig_drift_s_per_day,
         manual_offset_s=config.clock.manual_offset_s,
     )
     if eclock.fit is not None and not eclock.fit.model.fitted:
         warnings.append(eclock.message)
+    warnings += _fps_check(eclock, fps, config.clock.fps is None)
     playback = _playback(config)
     light = config.light
     if config.stimulus.pi_config is not None:
@@ -254,11 +256,22 @@ def _run_experiment(
     )
     phases = light.phases()
     cycles = cycle_table(
-        binned, windows, fps=config.clock.fps, cage=label, phases=phases, coverage=coverage, playback=playback
+        binned, windows, fps=fps, cage=label, phases=phases, coverage=coverage, playback=playback
     )
     cycles = add_control_contrast(cycles, binned, tuple(windows), controls)
     if len(cycles):
         cycles["tone_scheduled"] = _scheduled(config, cycles)
+        from buzzphono.metrics.cycles import MAX_FRAME_FRACTION
+
+        doubled = int(
+            (cycles[[f"{w}_frame_fraction" for w in windows]] > MAX_FRAME_FRACTION).any(axis=1).sum()
+        )
+        if doubled:
+            warnings.append(
+                f"{doubled} hour-cycle(s) hold more frames than their windows last: recordings overlap in "
+                "time (e.g. an '-attempt' session repeating another). Those cycles are excluded; remove the "
+                "duplicate recording to use them."
+            )
     cycles["usable"] = (
         (usable(cycles, ("on", "off")) & cycles["tone_scheduled"]) if len(cycles) else pd.Series(dtype=bool)
     )
@@ -298,6 +311,7 @@ def _run_experiment(
         res,
         steps.sub(0.65, 1.0),
         steps.cancel,
+        fps,
     )
     analyses = list(dict.fromkeys(config.analyses))
     for k, name in enumerate(analyses):
@@ -325,6 +339,25 @@ def _scheduled(config: AnalysisConfig, cycles: pd.DataFrame) -> pd.Series:
     on_min = cycles["hour"].astype(int) * 60 + config.stimulus.on.start_min
     inside = (on_min >= lo) & (on_min < hi) if lo <= hi else (on_min >= lo) | (on_min < hi)
     return inside
+
+
+def _spec_of(config: AnalysisConfig, layout: ExperimentLayout) -> ExperimentSpec:
+    return next(e for e in config.experiments if e.path.resolve() == layout.root.resolve())
+
+
+def _fps_check(eclock: ExperimentClock, fps: float, automatic: bool) -> list[str]:
+    """Warn when the frames per 20-min chunk say the camera ran at a clearly different rate."""
+    full = max((n for n, src in eclock.nf.values() if src == "tracker frame list"), default=0)
+    if not full:
+        return []
+    implied = full / 1200.0
+    if abs(implied / fps - 1) <= 0.05:
+        return []
+    where = "read from the experiment's settings (or the default)" if automatic else "set in clock.fps"
+    return [
+        f"The chunks hold {full} frames, about {implied:.3g} fps for 20-minute chunks, but the analysis "
+        f"uses {fps:g} fps ({where}). If the chunks are 20 minutes long, set clock.fps: {implied:.3g}."
+    ]
 
 
 def _ingest_warnings(report: IngestReport) -> list[str]:
@@ -362,7 +395,7 @@ def _pi_config_checks(
         frame_size=cal.frame_size,
         labels={c.name.label for c in layout.chunks},
         on_window=(s.on.start_min, s.on.end_min),
-        fps=config.clock.fps,
+        fps=config.fps_for(_spec_of(config, layout)),
     )
     warnings = [f"Pi config {c.field}: {c.message}" for c in problems if c.severity != "info"]
     light = config.light
@@ -391,6 +424,7 @@ class _Ctx:
     res: ExperimentResult
     say: Progress
     cancel: CancelFn | None
+    fps: float = 25.0
 
     def compare(
         self, a: str, b: str, label: str, data: pd.DataFrame | None = None, **kw: Any
@@ -479,7 +513,7 @@ def _psth(ctx: _Ctx) -> None:
     ctx.res.tables["psth/psth"] = psth(
         ctx.binned,
         ctx.good,
-        fps=ctx.config.clock.fps,
+        fps=ctx.fps,
         onset_min=on0,
         sham_onset_min=ctx.windows["sham_on"][0],
         n_resamples=min(ctx.config.stats.n_resamples, 999),
@@ -488,7 +522,7 @@ def _psth(ctx: _Ctx) -> None:
     # F2 contrast: speaker-zone fraction 0-5 min after the onset vs the 5 min before, per cycle
     from buzzphono.metrics.psth import bin_quantities, event_matrix
 
-    values = bin_quantities(ctx.binned, ctx.config.clock.fps)["colony_frac_in_zone"]
+    values = bin_quantities(ctx.binned, ctx.fps)["colony_frac_in_zone"]
     onsets = ctx.good["cycle_start_ns"].to_numpy(dtype=np.int64) + on0 * 60 * 10**9
     mat, rel = event_matrix(values, ctx.binned, onsets, 5, 5)
     with np.errstate(invalid="ignore"), warnings.catch_warnings():
@@ -516,9 +550,7 @@ def _zt(ctx: _Ctx) -> None:
         n_resamples=min(ctx.config.stats.n_resamples, 999),
         seed=ctx.config.stats.seed,
     )
-    ctx.res.tables["zt_profile/minute_series"] = minute_series(
-        ctx.binned, fps=ctx.config.clock.fps, windows=ctx.windows
-    )
+    ctx.res.tables["zt_profile/minute_series"] = minute_series(ctx.binned, fps=ctx.fps, windows=ctx.windows)
 
 
 def _spatial(ctx: _Ctx) -> None:
@@ -573,7 +605,7 @@ def _approach(ctx: _Ctx) -> None:
         cage=ctx.cal.cage_polygon(),
         to_mm=to_mm,
         settings=settings,
-        fps=ctx.config.clock.fps,
+        fps=ctx.fps,
         cancel=ctx.cancel,
     )
     table = approach_cycle_table(res, ctx.good, ctx.controls)
@@ -643,7 +675,7 @@ def _sensitivity(ctx: _Ctx) -> None:
                 ctx.report.cache_dir,
                 mode=mode,
                 cage=ctx.cal.cage_polygon(),
-                fps=ctx.config.clock.fps,
+                fps=ctx.fps,
             )
     px_per_mm = None
     if ctx.cal.physical is not None:
@@ -659,7 +691,7 @@ def _sensitivity(ctx: _Ctx) -> None:
         speaker=ctx.cal.polygon(ctx.cal.speaker.name),
         cage=ctx.cal.cage_polygon(),
         frame_size=(w, h),
-        fps=ctx.config.clock.fps,
+        fps=ctx.fps,
         colony=ctx.config.metric.colony_size,
         on=on,
         off=off,
@@ -689,6 +721,12 @@ def _flight(ctx: _Ctx) -> None:
         radius=f.radius_cage_widths,
         min_median=f.min_median,
     )
+    if abs(ctx.fps - 25.0) > 0.25:
+        ctx.res.warnings.append(
+            f"flight analysis skipped: it is defined for 25-fps video (its speed and time thresholds are in "
+            f"frames), and this experiment is analysed at {ctx.fps:g} fps"
+        )
+        return
     walls = [z.name for z in ctx.cal.zones if z.role != "speaker"]
     if len(walls) != 3:
         ctx.res.warnings.append(

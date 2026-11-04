@@ -187,13 +187,13 @@ def fit_clock(
     if reject:
         msg = (
             f"Not enough consistent tone-onset bursts ({n_bursts} found; {reject}): using the nominal clock "
-            "(25 fps from each session start)."
+            "(the nominal frame rate from each session start)."
         )
     else:
         msg = (
             f"Not enough tone-onset bursts ({n_bursts} found; at least {min_kept}, with "
             f"{MIN_SESSION_BURSTS} in one session, are needed): using the nominal clock "
-            "(25 fps from each session start)."
+            "(the nominal frame rate from each session start)."
         )
     return ClockFit(ClockModel.nominal(sessions, msg), df)
 

@@ -219,6 +219,12 @@ def analyse(
         typer.echo(f"Report:  {result.report}")
         if open_report:
             webbrowser.open(result.report.resolve().as_uri())
+    if not any(int(e.cycles["usable"].sum()) for e in result.experiments if len(e.cycles)):
+        job.finish("failed", None, 4)
+        raise DataError(
+            "No usable hour-cycle in any experiment, so there are no results to report.",
+            hint="Check the analysis window (start/end), the frame rate and the warnings above.",
+        )
     if bad > max_bad_chunks:
         job.finish("failed", None, 4)
         raise DataError(
@@ -321,6 +327,8 @@ def calibrate(
     if width_mm is not None or height_mm is not None:
         if width_mm is None or height_mm is None:
             raise ConfigError("Give both --width-mm and --height-mm.")
+        if width_mm <= 0 or height_mm <= 0:
+            raise ConfigError("--width-mm and --height-mm must be positive (the cage's inner size in mm).")
         base["physical"] = PhysicalSize(cage_width_mm=width_mm, cage_height_mm=height_mm).model_dump()
     if "frame_width_px" not in base:
         from buzzphono.calibration import image_size, reference_images
@@ -377,7 +385,9 @@ def demo(
     folder: Path = typer.Argument(
         Path("buzzphono_demo"), help="Where to create the demo experiments and results."
     ),
-    hours: int = typer.Option(24, "--hours", min=6, max=96, help="Hours to simulate per experiment."),
+    hours: int = typer.Option(
+        72, "--hours", min=6, max=144, help="Hours to simulate per experiment (72 = 4 calendar days)."
+    ),
     seed: int = typer.Option(1, "--seed", help="Random seed."),
     open_report: bool = typer.Option(False, "--open", help="Open the report when done."),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
@@ -480,6 +490,8 @@ def status(
     st = jobs.read_status(run)
     if st is None:
         raise DataError(f"No run status in {run}.")
+    if st.get("state") == "running" and not jobs.pid_alive(int(st.get("pid", -1))):
+        st["state"] = "stopped (its process has ended without finishing)"
     typer.echo(json.dumps(st, indent=1))
 
 
@@ -519,7 +531,9 @@ def app_cmd(
 def cache_info(experiment: Path, cache: Path | None = typer.Option(None, "--cache")) -> None:
     """What the cache holds for this experiment."""
     from buzzphono.io.cache import CacheIndex, cache_dir_for
+    from buzzphono.io.discover import discover
 
+    discover(experiment)  # a clear error if this is not an experiment folder
     d = cache_dir_for(experiment, cache)
     index = CacheIndex.open(d, experiment)
     counts: dict[str, int] = {}

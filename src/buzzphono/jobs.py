@@ -150,7 +150,7 @@ def remove_partial_run(run_dir: Path) -> None:
             p.unlink(missing_ok=True)
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
@@ -181,7 +181,7 @@ def lock_holder(cache_dir: Path) -> dict[str, Any] | None:
         return None
     if info.get("pid") == os.getpid():
         return None
-    if not _pid_alive(int(info.get("pid", -1))) or time.time() - float(info.get("heartbeat", 0)) > STALE_S:
+    if not pid_alive(int(info.get("pid", -1))) or time.time() - float(info.get("heartbeat", 0)) > STALE_S:
         return None
     return info
 

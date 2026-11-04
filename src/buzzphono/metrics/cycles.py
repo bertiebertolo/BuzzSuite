@@ -29,6 +29,7 @@ from buzzphono.timebase import NS_PER_HOUR, NS_PER_MIN, NS_PER_S, from_ns
 
 METRICS = ("colony_frac_in_zone", "resting_frac_in_zone", "mean_frame_frac", "in_zone_per_frame")
 EXCLUDED_STIMULUS = ("failed", "not played")
+MAX_FRAME_FRACTION = 1.15  # camera drift gives < 1.001; more means overlapping sessions
 MIN_PHASE_CYCLES = 4  # a phase is tested only with at least 4 cycles (docs/STATS_PLAN.md §5)
 
 
@@ -111,6 +112,8 @@ def cycle_table(
             ok &= out[f"{name}_max_gap_s"] <= coverage.max_gap_s
             ok &= out[f"{name}_minutes_with_resting"] >= coverage.min_minutes_with_resting
         ok &= cap_t[:, lo:hi].sum(1) > 0
+        # more frames than the window can hold: overlapping recordings would be counted twice
+        ok &= out[f"{name}_frame_fraction"] <= MAX_FRAME_FRACTION
         out[f"{name}_ok"] = ok
         rest_f = rest[:, lo:hi].sum(1)
         for z, zone in enumerate(binned.zones):

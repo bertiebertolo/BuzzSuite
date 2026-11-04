@@ -141,7 +141,13 @@ def window_status(log: PlaybackLog, window_start: datetime, window_end: datetime
     "failed" | "not covered by the log", fraction of the window covered by playback)."""
     span = log.span
     length = (window_end - window_start).total_seconds()
+    near = log.events[
+        (log.events["time"] >= window_start - pd.Timedelta(minutes=1)) & (log.events["time"] < window_end)
+    ]
     if span is None or window_start < span[0] or window_end > span[1] or length <= 0:
+        # a failed start inside the window is decisive even where the log does not cover all of it
+        if (near["kind"] == "failed_start").any():
+            return "failed", 0.0
         return "not covered by the log", float("nan")
     covered = 0.0
     for start, end in zip(log.intervals["start"], log.intervals["end"], strict=True):
@@ -151,9 +157,6 @@ def window_status(log: PlaybackLog, window_start: datetime, window_end: datetime
     frac = min(1.0, covered / length)
     if frac >= 0.9:
         return "played", frac
-    near = log.events[
-        (log.events["time"] >= window_start - pd.Timedelta(minutes=1)) & (log.events["time"] < window_end)
-    ]
     if frac == 0 and (near["kind"] == "failed_start").any():
         return "failed", frac
     return ("partly played" if frac > 0 else "not played"), frac

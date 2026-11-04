@@ -11,8 +11,11 @@ The headline comparison is recomputed with one choice changed at a time:
 * **clock** – every other time base supplied (thesis, nominal, corrected).
 
 Every variant uses the same hour-cycles as the baseline (the baseline's usable cycles), so only the
-choice changes. A variant is flagged when the mean Δ changes sign, or when a change of at most
-5 px in the zone changes the mean Δ by more than half.
+choice changes. Flags apply only when the baseline interval excludes 0 (otherwise there is no
+effect whose robustness could be judged). A variant is flagged when the mean Δ changes sign (for
+zone changes only when the change is at most half the zone's width: moving the zone further takes
+it off the speaker, and the effect is then expected to vanish), or when a change of at most 5 px in
+the zone changes the mean Δ by more than half.
 """
 
 from __future__ import annotations
@@ -264,13 +267,29 @@ def run_sensitivity(
     base_delta = float(table.iloc[0]["mean_delta"])
     with np.errstate(invalid="ignore", divide="ignore"):
         table["relative_change"] = (table["mean_delta"] - base_delta) / abs(base_delta)
+    half_width = 0.5 * float(np.min(speaker.max(axis=0) - speaker.min(axis=0)))
+    table["zone_change_rel_width"] = table["zone_change_px"] / (2 * half_width) if half_width > 0 else np.nan
+    # Flags judge the robustness of an effect. With no clear baseline effect (its interval includes
+    # 0) every variant "flips sign" by chance, so flags would only be noise.
+    b_lo, b_hi = float(table.iloc[0]["ci_low"]), float(table.iloc[0]["ci_high"])
+    baseline_effect = bool(np.isfinite(b_lo) and np.isfinite(b_hi) and (b_lo > 0 or b_hi < 0))
+    table["flag_note"] = (
+        "" if baseline_effect else "no flags: the baseline interval includes 0 (no clear effect to test)"
+    )
     flags = []
     for _, r in table.iterrows():
         f = []
+        if not baseline_effect:
+            flags.append("")
+            continue
+        # moving or growing the zone by more than half its width takes it off the speaker: a sign
+        # flip there is expected, not a sign of a fragile result
+        small_zone_change = not str(r["family"]).startswith("zone") or abs(r["zone_change_px"]) <= half_width
         if (
             np.isfinite(r["mean_delta"])
             and np.sign(r["mean_delta"]) != np.sign(base_delta)
             and r["mean_delta"] != 0
+            and small_zone_change
         ):
             f.append("sign flips")
         if (

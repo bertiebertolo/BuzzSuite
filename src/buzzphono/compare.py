@@ -36,6 +36,13 @@ def _experiments(run: Path) -> list[tuple[dict[str, Any], Path]]:
 
 def compare_runs(runs: list[Path], out: Path) -> list[Path]:
     """Experiment table (effect, CI, metadata), confounds, group contrasts, pooled tests, tuning figure."""
+    resolved = [r.resolve() for r in runs]
+    if len(set(resolved)) != len(resolved):
+        raise DataError("The same run is given more than once: its experiments would be counted twice.")
+    from buzzphono.jobs import EXPERIMENT_MARKERS
+
+    if any((out / m).exists() for m in EXPERIMENT_MARKERS):
+        raise DataError(f"{out} is an experiment folder; choose another folder for the comparison.")
     rows = []
     cycles = []
     settings: dict[str, Any] = {}
@@ -137,9 +144,12 @@ def redraw(run: Path) -> list[Path]:
     windows = {"on": (on["start_min"], on["end_min"])}
     paths: list[Path] = []
     for info, folder in _experiments(run):
-        tables = {
-            p.relative_to(folder).with_suffix("").as_posix(): pd.read_csv(p) for p in folder.rglob("*.csv")
-        }
+        tables = {}
+        for p in folder.rglob("*.csv"):
+            try:
+                tables[p.relative_to(folder).with_suffix("").as_posix()] = pd.read_csv(p)
+            except pd.errors.EmptyDataError:
+                continue  # an analysis that produced no rows
         cyc = tables.get("cycles/cycle_table", pd.DataFrame())
         good = cyc[cyc["usable"].astype(bool)] if len(cyc) else cyc
         res = SimpleNamespace(label=info["label"], tables=tables, out_dir=folder, extras={}, warnings=[])

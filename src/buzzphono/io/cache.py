@@ -22,6 +22,7 @@ import json
 import os
 import tempfile
 import time
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -175,7 +176,9 @@ class CacheIndex:
             return False
         if entry.get("extractor") != TIER_VERSIONS.get(tier, EXTRACTOR_VERSION):
             return False
-        return self.tier_path(tier, chunk_id).is_file()
+        path = self.tier_path(tier, chunk_id)
+        # a truncated or damaged cache file is rebuilt rather than trusted
+        return path.is_file() and zipfile.is_zipfile(path)
 
     def set_entry(self, chunk_id: str, tier: str, entry: dict[str, Any]) -> None:
         self.data["chunks"].setdefault(chunk_id, {})[tier] = entry

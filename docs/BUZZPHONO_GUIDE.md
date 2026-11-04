@@ -60,15 +60,25 @@ BuzzSuite, the **Phonotaxis** tab has the same **Open the BuzzPhono app** button
 buzzphono demo buzzphono_demo --open
 ```
 
-This simulates two cages of 30 mosquitoes and analyses them, which takes about three minutes:
+This simulates two cages of 30 mosquitoes for 72 hours (four calendar days) and analyses them,
+which takes about ten minutes. `--hours 24` is quicker but too short for a firm conclusion; see
+[section 5](#5-the-statistics):
 
 - **tone**: the tone draws resting mosquitoes to the speaker;
 - **no_tone**: nothing happens when the "tone" is due.
 
-The `--open` flag opens the report in your browser when the run finishes. The tone cage shows a
-clear, stable effect; the no-tone cage shows none. That is what a real effect and a real null
-look like. The simulated files have the same format as BuzzWatch's, so the demo exercises every
-step of the pipeline.
+The `--open` flag opens the report in your browser when the run finishes.
+
+- **The tone cage** should be concluded "Evidence of an effect", with the sham and the control
+  zones flat. Moving the zone far off the speaker removes the effect, as it should, and the
+  sensitivity analysis does not flag that.
+- **The no-tone cage** should show no clear effect. About one test in twenty on a null experiment
+  is below 0.05 by chance, which is why the conclusion needs several tests to agree.
+
+The simulated files have the same format as BuzzWatch's (at 2 frames per second, stated in each
+cage's `buzzwatch_track_settings.yml`), so the demo exercises every step of the pipeline. Each demo
+cage also holds a `pi_config.ini` and a `sound.log`. Try them with `buzzphono validate` (section 3)
+to see the Pi checks.
 
 ![Speaker-zone resting fraction, ON vs OFF, in the simulated tone cage](images/demo_resting_on_vs_off.png)
 
@@ -144,7 +154,12 @@ buzzphono analyse --config my_experiments.yml
 ```
 
 Results go to `<experiment>/plots/buzzphono/<date-time>-<settings id>/` unless you give
-`--out`. The first run of an experiment reads every tracking file into a compact cache, which takes
+`--out`.
+
+**Frame rate.** BuzzPhono reads the camera's frame rate from the experiment's
+`buzzwatch_track_settings.yml` (`fps:`). If the file does not state one, it uses 25 fps, the
+Raspberry Pi rigs' rate. If the frames per 20-minute chunk suggest a different rate, a warning
+tells you which value to set with `clock.fps`. The first run of an experiment reads every tracking file into a compact cache, which takes
 a few minutes on a hard drive. Later runs reuse the cache and take seconds to minutes.
 
 ### From BuzzSuite
@@ -157,9 +172,22 @@ Phonotaxis tab can analyse the loaded experiment directly, with progress and Can
 ## 4. What BuzzPhono measures
 
 All analyses run on **hour-cycles**: one clock hour of one cage. Within each hour, the tone window
-(ON, minutes 40–50 by default) is compared with a baseline (OFF, minutes 28–38). OFF is chosen so
-that ON and OFF sit at the same position within BuzzWatch's 20-minute video chunks: the tracker's
-first two minutes of each chunk are less reliable, and that affects both windows equally.
+(ON, minutes 40–50 by default) is compared with a baseline (OFF, minutes 28–38, the published
+choice).
+
+**Video chunks and the tracker's warm-up.** The Pis cut video into 20-minute chunks counted from
+the session start. When a session starts on the hour, a chunk begins at :00, :20 and :40. ON then
+starts on a fresh chunk, and the tracker's first two minutes of a chunk are less reliable, while
+OFF falls in the middle of one. Two checks guard against mistaking this for an effect:
+
+- the **sham comparison** (minutes 20–30 vs 08–18), which starts on a fresh chunk exactly like ON
+  but has no tone;
+- the sensitivity variant **ON 42–50**, which leaves out the first two minutes.
+
+**Light phases.** Dawn is the hour that starts at lights-on and dusk is the hour before lights-off
+(from `light.lights_on` / `lights_off`, or the Pi's light ramps). Day is the hours between them and
+night the rest. For example, lights 05:00–17:00 give dawn 05–06, day 06–16, dusk 16–17 and night
+17–05. A phase is tested only with at least 4 hour-cycles.
 
 ### 4.1 Speaker-zone resting fraction (headline)
 
@@ -173,13 +201,20 @@ counts are capped at the colony size C (30 by default): `total = min(n, C)` and
 The **ON − OFF difference per hour-cycle** is the primary result. When the cap binds, as it does
 in almost every frame of a full cage, this is essentially *speaker-zone resters ÷ colony*.
 
-Three companions are always reported:
+Three companions are always computed, so the effect of the cap is never hidden. All three are in
+`cycles/cycle_table.csv`; the uncapped one is also tested in `statistics.csv`:
 
 - the uncapped `resting_frac_in_zone`;
 - the mean of per-frame fractions;
 - the raw count per frame.
 
-So the effect of the cap is never hidden.
+**Choosing control zones.** Draw one zone of the same size and shape as the speaker zone on each
+of the other walls, at the same height. Each should sit where the cage looks like the speaker's
+wall but has no speaker, and at least a zone's width from any feeder or corner.
+- **Roles:** name feeders `feeder…` (or give them the role *other*). Any zone in
+  `custom_zones.json` that is not named `speaker` becomes a control, except feeders.
+- **Use:** the speaker-minus-control comparison uses every control, after scaling each to the
+  speaker zone's area.
 
 Two control comparisons come with every run:
 
@@ -227,7 +262,9 @@ distance and zone entries.
 **Validation:** approach bouts passed the positive-control check on three *Aedes aegypti* cages
 (more during the tone, none at the sham). A second measure, the mean radial velocity towards the
 speaker, did **not** pass: it is dominated by take-offs from the speaker zone. It is reported but
-labelled *not validated*, and you should not use it as evidence of approach.
+labelled *measure not validated*, and you should not use it as evidence of approach. The
+`validation` column describes the **measure**, not your result: a validated measure can still
+show no effect in your experiment.
 
 ### 4.7 Reliability
 
@@ -235,7 +272,10 @@ How much of the ON − OFF difference varies between cages, between days of one 
 hours. Reported as:
 
 - intraclass correlations (ICC) with intervals;
-- the **minimum detectable effect** (MDE) at 80% power for your design;
+- the **minimum detectable effect** (MDE) at 80% power for your design. It is computed from the
+  noncentral t with cage-days − 1 degrees of freedom, matching the primary test. Quote
+  `mde_analytic`: `mde_bootstrap` is only a cross-check, and with fewer than about 10 cage-days it
+  is unreliable (too small);
 - a planning table: the MDE for 4 to 32 cage-days, so you can size the next experiment.
 
 With fewer than five cages the between-cage part is very imprecise, and the table says so.
@@ -251,9 +291,23 @@ The headline is recomputed with one choice changed at a time:
 - other ON and OFF windows;
 - every other clock.
 
-Every variant uses the same hours. A variant is **flagged** if the effect changes sign, or if a
-change of at most 5 px in the zone changes it by more than half. A robust result keeps its sign
-across sensible choices. A result that depends on exactly where the zone was drawn is not robust.
+Every variant uses the same hours. Flags apply only when the baseline's interval excludes 0. With
+no clear effect, every variant "flips sign" by chance, and the `flag_note` column says so. A
+variant is **flagged** in either of these cases:
+- the effect changes sign;
+- a change of at most 5 px in the zone changes it by more than half.
+
+Zone changes larger than half the zone's width are never flagged for a sign change. Moving a
+36-px zone by 40 px takes it off the speaker, and the effect *should* then vanish: that is the
+expected spatial specificity, not fragility. `zone_change_rel_width` gives each change as a
+fraction of the zone width.
+
+**What to do with a flag:**
+- **Small zone changes (±5–10 px):** the zone outline matters too much. Check the zone on the
+  picture and report the specification curve.
+- **Window or clock variants:** report both values and the reason for your choice.
+
+A robust result keeps its sign across all small, sensible choices.
 
 ![Sensitivity forest plot](images/demo_sensitivity.png)
 
@@ -275,7 +329,9 @@ The flight analyses of the 2026 flight-phonotaxis study, ported unchanged:
 - linked take-off → landing bouts;
 - distance from each wall.
 
-They need four zones, one per wall (the speaker plus three others), and 25-fps video.
+They need four zones, one per wall (the speaker plus three others; feeders count as walls), and
+25-fps video. At other frame rates the flight analysis is skipped with a warning, because its speed
+and time thresholds are defined in 25-fps frames.
 
 ---
 
@@ -304,11 +360,57 @@ In short:
 - **Two-sided by default.** Use `stats.alternative: greater` only if the direction was fixed
   before seeing the data.
 
-With fewer than 6 cage-days the wild bootstrap's interval is too narrow. BuzzPhono then uses a
-t-test on the cage-day means instead (G − 1 degrees of freedom) and names it in the `method`
-column. Its intervals are wide and its p-values modest, because a two-day recording of one cage
-holds only two independent units. That is honest, not a defect. Report the interval and the
-effect size, and plan more cage-days with the reliability table.
+**Few cage-days.**
+- **Fewer than 6 cage-days:** the wild bootstrap's interval is too narrow. BuzzPhono then uses a
+  cluster-robust t-test with G − 1 degrees of freedom (G = cage-days) instead. It has the same
+  estimate, the mean over hour-cycles, and its interval always contains that estimate. The
+  `wild_cluster_method` column names the test used.
+- **One cage-day:** no interval can be computed at all; the columns are empty and a warning says
+  why.
+- **Units:** a recording of one cage over two days holds only two independent units, so its
+  interval is wide and its p-value modest. Pool cages, or record at least four days per cage.
+
+**The conclusion** in `statistics.csv` (column `conclusion`) and at the top of each experiment in
+the report follows the plan's wording rule:
+
+| conclusion | when |
+|---|---|
+| **Evidence of an effect** | the primary 95% interval excludes 0, the block sign-flip test agrees (p < 0.05), and the sham shows no comparable effect |
+| **Suggestive** | only the per-hour Wilcoxon test is below 0.05 |
+| **No clear effect** | otherwise |
+
+The block test cannot reach p < 0.05 with fewer than about 6 twelve-hour blocks. A single cage
+recorded for 2 days can therefore be "Suggestive" at most.
+
+**Secondary analyses (family F2).** The main contrast of each secondary analysis run is Holm-adjusted
+across that family (`multiplicity/secondary_family_F2.csv`). The contrasts are:
+- the attraction index;
+- the PSTH onset response (5 minutes after the onset vs the 5 before);
+- approach (directed velocity);
+- the fraction within 20 px of the speaker zone.
+
+**Reporting in a paper.** A methods paragraph you can adapt:
+
+> Phonotaxis was analysed with BuzzPhono (version, from `run_manifest.json`). For each hour, the
+> fraction of the colony resting in the speaker zone during the tone (minutes 40–50) was compared
+> with minutes 28–38. Per-frame counts were capped at the colony size. Recording times were
+> corrected for camera clock drift using the tone-evoked flight burst. The mean difference was
+> tested with a wild cluster bootstrap-t with Webb weights at the cage-day level (Cameron, Gelbach
+> & Miller 2008; Webb 2014), or with a cluster-robust t-test when there were fewer than 6
+> cage-days. Supporting tests were a block sign-flip permutation test and the Wilcoxon
+> signed-rank test (Wilcoxon 1945). Phases were Holm-corrected (Holm 1979), and exploratory
+> families were controlled with the Benjamini–Hochberg procedure (Benjamini & Hochberg 1995). A
+> sham comparison at the same chunk position and area-matched control zones served as controls.
+
+Lead with the mean difference and its 95% interval, then the conclusion, n (hour-cycles and
+cage-days), the sham and the control-zone result. Put the sensitivity curve in a supplement.
+
+- Cameron AC, Gelbach JB, Miller DL (2008) *Rev Econ Stat* 90:414–427.
+- Webb MD (2014) Reworking wild bootstrap based inference for clustered errors. Queen's Economics
+  Department Working Paper 1315.
+- Wilcoxon F (1945) *Biometrics Bull* 1:80–83.
+- Holm S (1979) *Scand J Stat* 6:65–70.
+- Benjamini Y, Hochberg Y (1995) *J R Stat Soc B* 57:289–300.
 
 Every statistics table includes the assumptions of each test, and the report repeats them.
 
@@ -383,6 +485,16 @@ Every table is tidy CSV: one row per observation, units in the column names (`_p
 | `hodges_lehmann`, `rank_biserial`, `dz`, `fold_change` | effect sizes |
 | `*_p_holm_phases` | Holm-corrected across phases |
 | `mixed_model_*` | mixed-model estimate, interval and status |
+| `wild_cluster_method` | which primary test was used (wild bootstrap, or the cluster-robust t below 6 cage-days) |
+| `n_cages`, `n_cage_days` | independent units behind the row |
+| `conclusion` | the wording rule's verdict (section 5) |
+
+Other folders:
+- `clock/tone_onset_bursts.csv`: the bursts the clock was fitted on. The clock used is also in
+  the report's data-quality table.
+- `flight/`: the flight tables.
+- `multiplicity/`: the F2 family.
+- `psth/onset_response.csv` and `spatial/band_statistics.csv`: the F2 contrasts.
 
 Figures are deterministic: the same data give byte-identical files.
 
@@ -405,8 +517,7 @@ experiments:
     start: 2026-06-04 00:00     # optional analysis window
     end: 2026-06-06 00:00
     calibration: null           # default: <folder>/buzzphono_calibration.json, else imported
-analyses: [resting_fraction, attraction_index, psth, zt_profile, spatial, approach,
-           reliability, sensitivity, flight, comparison]
+analyses: all                 # or a list, e.g. [resting_fraction, psth]
 stimulus:
   on: 40-50                     # minutes of every hour
   off: 28-38
@@ -420,7 +531,7 @@ stimulus:
   active_until: "24:00"
 clock:
   mode: corrected               # corrected | nominal | thesis
-  fps: 25
+  fps: null                   # default: from buzzwatch_track_settings.yml, else 25
   rig_drift_s_per_day: null     # used if the burst fit fails (Penzance ≈ 51)
   manual_offset_s: {}           # {session: seconds}
 light:
