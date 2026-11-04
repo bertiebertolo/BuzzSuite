@@ -26,6 +26,7 @@ import os
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from multiprocessing import get_context
 from pathlib import Path
@@ -35,7 +36,7 @@ import numpy as np
 
 from buzzphono.errors import Cancelled, DataError
 from buzzphono.io.cache import (
-    EXTRACTOR_VERSION,
+    TIER_VERSIONS,
     CacheIndex,
     atomic_save_npz,
     cache_dir_for,
@@ -153,7 +154,18 @@ def extract_resting(obj: TrackerObject) -> tuple[Arrays, Summary]:
 
 def extract_moving(obj: TrackerObject) -> tuple[Arrays, Summary]:
     obj_ids, own, frame, xy, summary = _detections(obj)
-    return {"obj_ids": obj_ids, "det_obj": own, "det_frame": frame, "det_xy": xy}, summary
+    # how each track began and ended (1 = from / into a resting mosquito), for take-offs and landings
+    starts = [rec.get("start_type") == "resting" for rec in obj.objects.values()]
+    ends = [rec.get("end_type") == "resting" for rec in obj.objects.values()]
+    arrays: Arrays = {
+        "obj_ids": obj_ids,
+        "det_obj": own,
+        "det_frame": frame,
+        "det_xy": xy,
+        "obj_start_resting": np.asarray(starts, dtype=np.int8),
+        "obj_end_resting": np.asarray(ends, dtype=np.int8),
+    }
+    return arrays, summary
 
 
 def _state_codes(state: list[Any], n: int) -> np.ndarray:
@@ -313,7 +325,7 @@ def ingest(
             todo.append((chunk.chunk_id, tier, src, ident))
 
     def record(chunk_id: str, tier: TrackingKind, ident: dict[str, Any], summary: Summary) -> None:
-        index.set_entry(chunk_id, tier, {"source": ident, "extractor": EXTRACTOR_VERSION, **summary})
+        index.set_entry(chunk_id, tier, {"source": ident, "extractor": TIER_VERSIONS[tier], **summary})
         if summary.get("status") == "ok":
             report.built += 1
         else:
@@ -361,7 +373,15 @@ def ingest(
                     finished, _ = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
                     for fut in finished:
                         chunk_id, tier, ident = pending.pop(fut)
-                        record(chunk_id, tier, ident, fut.result())
+                        try:
+                            summary = fut.result()
+                        except BrokenProcessPool as exc:
+                            raise DataError(
+                                f"A worker process stopped abruptly while reading {tier} {chunk_id}.",
+                                hint="The computer may be short of memory: try fewer workers (--workers 2). "
+                                "Scripts that call BuzzPhono must start with `if __name__ == '__main__':`.",
+                            ) from exc
+                        record(chunk_id, tier, ident, summary)
                         done += 1
                         if progress:
                             progress(done / total, f"Read {tier} {chunk_id}")

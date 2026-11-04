@@ -32,7 +32,9 @@ from buzzphono.errors import DataError
 
 SCHEMA = "buzzphono-cache"
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1"
+EXTRACTOR_VERSION = "1"  # index layout; each tier also has its own version below
+# Bumped when a tier's arrays change; only that tier is rebuilt. moving 2: per-track start/end types.
+TIER_VERSIONS = {"resting": "1", "moving": "2", "tracks": "1"}
 _HASH_SPAN = 1 << 20  # 1 MiB from each end of a source file
 
 
@@ -143,7 +145,22 @@ class CacheIndex:
                 and isinstance(data.get("chunks"), dict)
             ):
                 index.data["chunks"] = data["chunks"]
+        index.remove_stale_partials()
         return index
+
+    def remove_stale_partials(self, older_than_s: float = 3600.0) -> int:
+        """Delete temporary files left by a process that was killed mid-write (an hour old or more,
+        so a write in progress elsewhere is never touched)."""
+        if not self.cache_dir.is_dir():
+            return 0
+        cutoff = time.time() - older_than_s
+        removed = 0
+        for p in self.cache_dir.rglob(".partial-*"):
+            with contextlib.suppress(OSError):
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+        return removed
 
     def tier_path(self, tier: str, chunk_id: str) -> Path:
         return self.cache_dir / tier / f"{chunk_id}.npz"
@@ -155,6 +172,8 @@ class CacheIndex:
     def is_current(self, chunk_id: str, tier: str, identity: dict[str, Any]) -> bool:
         entry = self.entry(chunk_id, tier)
         if entry is None or entry.get("source") != identity or entry.get("status") != "ok":
+            return False
+        if entry.get("extractor") != TIER_VERSIONS.get(tier, EXTRACTOR_VERSION):
             return False
         return self.tier_path(tier, chunk_id).is_file()
 

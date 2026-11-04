@@ -231,7 +231,8 @@ def import_existing(experiment_dir: Path, zones_file: Path | None = None) -> Cal
         vertices = spec.get("polygon") if isinstance(spec, dict) else spec
         if not isinstance(vertices, list) or len(vertices) < 3:
             continue
-        role = "speaker" if name == "speaker" else "control"
+        # feeders and other landmarks attract mosquitoes for their own reasons: not neutral controls
+        role = "speaker" if name == "speaker" else ("other" if "feeder" in name.lower() else "control")
         zones.append(Zone(name=name, role=role, polygon=[(float(x), float(y)) for x, y in vertices]))
     settings = experiment_dir / "buzzwatch_track_settings.yml"
     try:
