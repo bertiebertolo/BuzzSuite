@@ -76,7 +76,8 @@ The `--open` flag opens the report in your browser when the run finishes.
   - Moving the zone far off the speaker removes the effect, as it should, and the sensitivity
     analysis does not flag that.
   - The simulated flyers are aroused by the tone but do not make extra approach bouts, so the
-    approach table shows no increase.
+    approach table shows no increase. It may even show a small decrease, because more of the
+    flight during the tone is undirected.
 - **The no-tone cage** should show no clear effect. About one test in twenty on a null experiment
   is below 0.05 by chance, which is why the conclusion needs several tests to agree.
 
@@ -400,9 +401,11 @@ the report follows the plan's wording rule:
 
 | conclusion | when |
 |---|---|
-| **Evidence of an effect** | the primary 95% interval excludes 0 and its p < 0.05, the block sign-flip test agrees (p < 0.05), and the tone's change differs from the sham's: the row "tone minus sham" has an interval excluding 0, same sign |
-| **Not attributable to the tone** | the ON − OFF change is clear, but the sham shows a similar change (e.g. the tracker's warm-up at a chunk start) |
-| **Suggestive** | only the per-hour Wilcoxon test is below 0.05 |
+| **Evidence of an effect** | the main effect passes (primary 95% interval excludes 0, primary p < 0.05, block sign-flip p < 0.05), the tone's change exceeds the sham's (row "tone minus sham": interval excludes 0, same sign) and, with several cages, the whole-cage interval excludes 0 too |
+| **Not confirmed across cages** | as above, but with whole cages as units the interval includes 0: the effect may belong to particular cages |
+| **Effect seen, but not shown to exceed the sham** | the main effect passes, the sham itself shows no clear change, but the tone-minus-sham contrast is inconclusive (it is noisier than the main comparison; more cage-days help) |
+| **Not attributable to the tone** | the main effect passes, but the sham shows a clear change of the same sign (e.g. the tracker's warm-up at a chunk start) |
+| **Suggestive only** | only the per-hour Wilcoxon test is below 0.05; it ignores the clustering of hours within days, so this is not support for an effect |
 | **No clear effect** | otherwise |
 
 The block test cannot reach p < 0.05 with fewer than about 6 twelve-hour blocks. A single cage
@@ -464,7 +467,8 @@ In the Penzance rigs the video drifts by about 50 seconds a day. BuzzPhono has t
   2. The clock is calibrated on the burst of flight the tone evokes every hour: the onset of that
      burst is found in each hour and regressed on time, giving one offset per recording session
      and one drift per experiment.
-  3. The fit must keep at least 8 bursts, and at least half of those found, with a drift below
+  3. The fit needs at least 8 bursts, with at least 3 in one session. It must keep at least half
+     of those found, its kept bursts must agree within 30 s, and its drift must be below
      300 s/day. Otherwise BuzzPhono says so and uses the nominal clock, or the rig's known drift
      if you give it (`clock.rig_drift_s_per_day`).
 - **nominal:** real frame counts at exactly 25 fps from each session's start.

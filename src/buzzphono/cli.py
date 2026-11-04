@@ -184,6 +184,7 @@ def analyse(
 
     cfg = build_run_config(paths or [], config or batch, analyses, clock, out, cache, workers, label, colony)
     target = run_dir or pipeline.default_run_dir(cfg)
+    pipeline.preflight(cfg, target)  # refuse before the results folder is created
     job = jobs.Job(target)
     printer = _Printer(quiet)
 

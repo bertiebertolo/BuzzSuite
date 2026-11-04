@@ -201,3 +201,13 @@ hours are correlated.
   - **Known limitation:** cage-days split at midnight. With strong night-time correlation across
     midnight (ρ ≥ 0.6) the false-positive rate can reach 0.06–0.10. The cage-cluster check and the
     block test (12-h blocks on the clock) bound this.
+- **2026-11-05 (review round 3): conclusion wording.**
+  - The tone-minus-sham contrast has about twice the variance of the main comparison. In
+    simulation, 29% of detected true effects were labelled "not attributable to the tone" only
+    because that contrast was inconclusive.
+  - "Not attributable" now needs the sham's own interval to exclude 0 with the same sign. An
+    inconclusive contrast reads "Effect seen, but not shown to exceed the sham".
+  - With several cages, an effect that the whole-cage check does not confirm now reads "Not
+    confirmed across cages" instead of "Evidence … (not confirmed …)". This was 15–22% of null
+    datasets when cages differ.
+  - "Suggestive" is renamed "Suggestive only (per-hour Wilcoxon, which ignores clustering)".

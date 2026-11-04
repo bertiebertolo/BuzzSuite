@@ -153,8 +153,7 @@ def run(
     make_report: bool = True,
 ) -> RunResult:
     run_dir = run_dir or default_run_dir(config)
-    _refuse_inside_experiment(run_dir)
-    _refuse_same_data_twice(config)  # before anything is created
+    preflight(config, run_dir)  # before anything is created
     claim_run_dir(run_dir)  # never write into an experiment folder, a foreign or a finished one
     result = RunResult(run_dir, config, [], started=datetime.now().isoformat(timespec="seconds"))
     steps = _Steps(progress, cancel, len(config.experiments) + 1)
@@ -352,13 +351,20 @@ def _scheduled(config: AnalysisConfig, cycles: pd.DataFrame) -> pd.Series:
     return inside
 
 
+def preflight(config: AnalysisConfig, run_dir: Path) -> None:
+    """Every refusal that must happen before a results folder is created (used by the CLI too)."""
+    _refuse_inside_experiment(run_dir)
+    _refuse_same_data_twice(config)
+
+
 def _refuse_inside_experiment(run_dir: Path) -> None:
     """Results may sit in <experiment>/plots/buzzphono/, never directly in an experiment folder or in
     one of its tracking folders."""
     from buzzphono.jobs import EXPERIMENT_MARKERS
 
     parent = run_dir.parent
-    in_tracking = any(p.name in EXPERIMENT_MARKERS for p in [run_dir, *run_dir.parents])
+    markers = {m.casefold() for m in EXPERIMENT_MARKERS}  # Windows paths ignore case
+    in_tracking = any(p.name.casefold() in markers for p in [run_dir, *run_dir.parents])
     if in_tracking or any((parent / m).is_dir() for m in EXPERIMENT_MARKERS):
         raise ConfigError(
             f"The results folder {run_dir} would be inside an experiment's own folders.",
@@ -1023,31 +1029,56 @@ def _interval_excludes_zero(row: pd.Series, prefix: str = "wild_cluster") -> boo
     return bool(np.isfinite(lo) and np.isfinite(hi) and (lo > 0 or hi < 0))
 
 
-def conclusion(main: pd.Series, tone_minus_sham: pd.Series | None, alpha: float = 0.05) -> str:
-    """The plan's wording (§8), with the sham tested directly.
+EVIDENCE = "Evidence of an effect"
+NOT_ATTRIBUTABLE = "Not attributable to the tone (the sham changes similarly)"
+NOT_ABOVE_SHAM = "Effect seen, but not shown to exceed the sham (that contrast is inconclusive)"
+NO_SHAM = "Effect seen; no sham comparison available"
+NOT_ACROSS_CAGES = "Not confirmed across cages (effect seen with cage-days as units only)"
+SUGGESTIVE = "Suggestive only (per-hour Wilcoxon, which ignores clustering)"
+NO_EFFECT = "No clear effect"
 
-    *Evidence of an effect* needs the primary interval to exclude 0, the primary p-value and the
-    block sign-flip p-value to be below ``alpha``, and the tone's change to differ from the sham's
-    (the per-cycle difference (ON − OFF) − (ON' − OFF') has an interval excluding 0, same sign).
+
+def conclusion(
+    main: pd.Series, tone_minus_sham: pd.Series | None, sham: pd.Series | None = None, alpha: float = 0.05
+) -> str:
+    """The plan's wording (§8), with the sham tested directly (docs/STATS_PLAN.md, Changes).
+
+    The main effect "passes" when its primary interval excludes 0, its primary p-value and the block
+    sign-flip p-value are below ``alpha``. Then:
+
+    * *Evidence of an effect* — and the tone-minus-sham contrast (ON − OFF) − (ON' − OFF') has an
+      interval excluding 0 with the same sign, and (with several cages) the cage-level interval
+      excludes 0 too;
+    * *Not attributable to the tone* — the sham itself shows a clear change of the same sign;
+    * *Effect seen, but not shown to exceed the sham* — the contrast is merely inconclusive (it has
+      about twice the variance of the main comparison);
+    * *Not confirmed across cages* — with several cages, the whole-cage interval includes 0.
     """
     p = main.get("wild_cluster_p_value", np.nan)
     block_p = main.get("block_signflip_p_value", np.nan)
     wil_p = main.get("wilcoxon_p_value", np.nan)
     primary = _interval_excludes_zero(main) and np.isfinite(p) and p < alpha
     if primary and np.isfinite(block_p) and block_p < alpha:
-        if tone_minus_sham is not None:
-            same_sign = np.sign(tone_minus_sham.get("mean_delta", np.nan)) == np.sign(
-                main.get("mean_delta", np.nan)
-            )
-            if not (_interval_excludes_zero(tone_minus_sham) and same_sign):
-                return "Not attributable to the tone (the sham changes similarly)"
-        text = "Evidence of an effect"
+        sign = np.sign(main.get("mean_delta", np.nan))
+        if tone_minus_sham is None or not np.isfinite(tone_minus_sham.get("wild_cluster_ci_low", np.nan)):
+            return NO_SHAM
+        if not (
+            _interval_excludes_zero(tone_minus_sham)
+            and np.sign(tone_minus_sham.get("mean_delta", np.nan)) == sign
+        ):
+            if (
+                sham is not None
+                and _interval_excludes_zero(sham)
+                and np.sign(sham.get("mean_delta", np.nan)) == sign
+            ):
+                return NOT_ATTRIBUTABLE
+            return NOT_ABOVE_SHAM
         if "cage_cluster_ci_low" in main and not _interval_excludes_zero(main, "cage_cluster"):
-            text += " (not confirmed with whole cages as units)"
-        return text
+            return NOT_ACROSS_CAGES
+        return EVIDENCE
     if np.isfinite(wil_p) and wil_p < alpha:
-        return "Suggestive (per-cycle Wilcoxon only)"
-    return "No clear effect"
+        return SUGGESTIVE
+    return NO_EFFECT
 
 
 def add_conclusions(stats: pd.DataFrame) -> pd.DataFrame:
@@ -1056,11 +1087,14 @@ def add_conclusions(stats: pd.DataFrame) -> pd.DataFrame:
     out = stats.copy()
     out["conclusion"] = ""
     main = out["comparison"].isin(["ON vs OFF (speaker zone)", "ON vs OFF (all experiments)"])
-    tms = out[out["comparison"].str.startswith("tone minus sham") & (out["phase"] == "all")]
+    everything = out["phase"] == "all"
+    tms = out[out["comparison"].str.startswith("tone minus sham") & everything]
+    sham = out[out["comparison"].str.startswith("sham") & everything]
     tms_row = tms.iloc[0] if len(tms) else None
+    sham_row = sham.iloc[0] if len(sham) else None
     for i in out.index[main]:
         if out.loc[i, "phase"] == "all":
-            out.loc[i, "conclusion"] = conclusion(out.loc[i], tms_row)
+            out.loc[i, "conclusion"] = conclusion(out.loc[i], tms_row, sham_row)
         elif not np.isfinite(out.loc[i].get("wild_cluster_p_value", np.nan)):
             out.loc[i, "conclusion"] = "not tested (fewer than 4 cycles)"
         else:

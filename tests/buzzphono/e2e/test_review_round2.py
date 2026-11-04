@@ -103,3 +103,11 @@ def test_results_never_go_inside_an_experiment(exp, tmp_path) -> None:
         with pytest.raises(BuzzPhonoError, match="inside an experiment"):
             pipeline.run(cfg, run_dir=target)
         assert not target.exists()
+
+
+def test_refused_runs_leave_nothing_behind(exp, tmp_path) -> None:
+    from buzzphono.cli import run as cli_run
+
+    for target in (exp / "exp" / "newrun", exp / "exp" / "TRACKING_RESTING" / "newrun"):
+        assert cli_run(["analyse", str(exp / "exp"), "--run-dir", str(target), "-q", "--no-figures"]) == 3
+        assert not target.exists()

@@ -108,7 +108,8 @@ def new_run_dir(settings: dict[str, Any]) -> Path:
         settings.get("output", {}).get("dir")
         or Path(settings["experiments"][0]["path"]) / "plots" / "buzzphono"
     )
-    return base / datetime.now().strftime("%Y%m%d-%H%M%S-app")
+    now = datetime.now()
+    return base / (now.strftime("%Y%m%d-%H%M%S-") + f"{now.microsecond // 1000:03d}-app")
 
 
 def start_job(settings: dict[str, Any], run_dir: Path) -> subprocess.Popen[bytes]:

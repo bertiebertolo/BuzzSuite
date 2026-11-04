@@ -151,7 +151,7 @@ def test_zt_profile_and_minute_series() -> None:
 
 
 def test_conclusion_wording_follows_the_plan() -> None:
-    from buzzphono.pipeline import conclusion
+    from buzzphono import pipeline as pl
 
     main = pd.Series(
         {
@@ -164,16 +164,21 @@ def test_conclusion_wording_follows_the_plan() -> None:
         }
     )
     differs = pd.Series({"wild_cluster_ci_low": 0.005, "wild_cluster_ci_high": 0.04, "mean_delta": 0.02})
-    assert conclusion(main, differs) == "Evidence of an effect"
-    # the sham changes as much as the tone: (ON - OFF) - (ON' - OFF') includes 0
-    same = pd.Series({"wild_cluster_ci_low": -0.02, "wild_cluster_ci_high": 0.02, "mean_delta": 0.0})
-    assert conclusion(main, same).startswith("Not attributable to the tone")
-    # interval excludes 0 but p is not below 0.05 (equal-tailed interval vs symmetric p): no evidence
-    split = pd.Series({**main, "wild_cluster_p_value": 0.06})
-    assert conclusion(split, differs).startswith("Suggestive")
+    inconclusive = pd.Series({"wild_cluster_ci_low": -0.01, "wild_cluster_ci_high": 0.05, "mean_delta": 0.02})
+    flat_sham = pd.Series({"wild_cluster_ci_low": -0.01, "wild_cluster_ci_high": 0.01, "mean_delta": 0.0})
+    moving_sham = pd.Series({"wild_cluster_ci_low": 0.01, "wild_cluster_ci_high": 0.05, "mean_delta": 0.03})
+    assert pl.conclusion(main, differs, flat_sham) == pl.EVIDENCE
+    # an underpowered tone-minus-sham contrast is inconclusive, not an artefact
+    assert pl.conclusion(main, inconclusive, flat_sham) == pl.NOT_ABOVE_SHAM
+    # only a sham that itself changes clearly makes the effect "not attributable"
+    assert pl.conclusion(main, inconclusive, moving_sham) == pl.NOT_ATTRIBUTABLE
+    assert pl.conclusion(main, None) == pl.NO_SHAM
+    # interval excludes 0 but p is not below 0.05: no evidence
+    assert pl.conclusion(pd.Series({**main, "wild_cluster_p_value": 0.06}), differs) == pl.SUGGESTIVE
     weak = pd.Series(
         {**main, "wild_cluster_p_value": 0.4, "block_signflip_p_value": 0.3, "wilcoxon_p_value": 0.2}
     )
-    assert conclusion(weak, None) == "No clear effect"
+    assert pl.conclusion(weak, None) == pl.NO_EFFECT
     cages = pd.Series({**main, "cage_cluster_ci_low": -0.01, "cage_cluster_ci_high": 0.06})
-    assert conclusion(cages, differs) == "Evidence of an effect (not confirmed with whole cages as units)"
+    assert pl.conclusion(cages, differs, flat_sham) == pl.NOT_ACROSS_CAGES
+    assert not pl.NOT_ACROSS_CAGES.startswith("Evidence")
