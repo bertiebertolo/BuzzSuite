@@ -180,3 +180,28 @@ def test_demo(tmp_path) -> None:
     assert run(["demo", str(tmp_path / "demo"), "--hours", "8", "-q"]) == 0
     reports = list((tmp_path / "demo" / "results").rglob("report.html"))
     assert len(reports) == 1
+
+
+def test_cli_error_paths_have_clear_messages(exp, tmp_path, capsys) -> None:
+    assert run(["analyse", "-c", str(tmp_path / "none.yml")]) == 3
+    bad_yaml = tmp_path / "bad.yml"
+    bad_yaml.write_text("experiments: [\n", encoding="utf-8")
+    assert run(["analyse", "-c", str(bad_yaml)]) == 3
+    listy = tmp_path / "list.yml"
+    listy.write_text("- just a list\n", encoding="utf-8")
+    assert run(["analyse", "-c", str(listy)]) == 3
+    assert run(["analyse", str(exp / "exp"), str(exp / "exp"), "--label", "x"]) == 3
+    err = capsys.readouterr().err
+    assert "not valid YAML" in err and "--label needs exactly one experiment" in err
+    work = exp / "copy2"
+    if not work.exists():
+        shutil.copytree(exp / "exp", work)
+    assert run(["calibrate", str(work), "--width-mm", "300"]) == 3
+    assert run(["calibrate", str(work), "--control", "no-points"]) == 3
+    assert run(["calibrate", str(work), "--speaker", "1,a 2,2 3,3"]) == 3
+    assert run(["calibrate", str(work), "--speaker", "1,2,3 2,2 3,3"]) == 3
+    assert run(["cache", "clean", str(tmp_path / "nothing"), "-y"]) == 0
+    assert run(["status", str(tmp_path)]) == 4
+    assert run(["report", str(tmp_path), "--no-open"]) == 4
+    assert run(["compare", str(tmp_path), "-o", str(tmp_path / "c")]) == 4
+    assert run(["status", str(tmp_path / "r"), "--cancel"]) == 0 and (tmp_path / "r" / "CANCEL").is_file()

@@ -12,7 +12,9 @@ this module calibrates on the flight burst every tone evokes: the onset of that 
 each hour, is regressed on time to give one clock offset per session and one drift per experiment
 (the camera's frame rate is not exactly 25 fps). This is the method of the 2026 flight-phonotaxis
 analysis, with the same guards: a fit must keep at least 8 bursts and half of those found, and a
-drift above 300 s/day is rejected as implausible.
+drift above 300 s/day is rejected as implausible. BuzzPhono adds one guard: the kept bursts must
+agree within 30 s (residual SD); half-noise burst sets otherwise pass, because the noise inflates the
+robust threshold itself.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ MAX_DRIFT_S_PER_DAY = 300.0
 MIN_KEPT_BURSTS = 8
 MIN_KEPT_FRACTION = 0.5
 MIN_SESSION_BURSTS = 3
+MAX_RESIDUAL_SD_S = 30.0  # real fits: 1.7-3.3 s; a larger scatter means the bursts do not agree
 
 
 def burst_series(session: SessionFrames, chunk_activity: Mapping[int, np.ndarray]) -> pd.Series:
@@ -146,6 +149,8 @@ def fit_clock(
         n_kept = int(keep.sum())
         if n_kept < min_kept or n_kept < min_kept_fraction * len(df):
             reject = f"the fit kept only {n_kept} of {len(df)} bursts"
+        elif float(np.std(resid[keep])) > MAX_RESIDUAL_SD_S:
+            reject = f"the kept bursts scatter by {float(np.std(resid[keep])):.0f} s (residual SD)"
         elif abs(float(beta[-1])) > max_drift:
             reject = f"the fitted drift ({float(beta[-1]):.0f} s/day) is implausible"
         else:

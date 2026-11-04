@@ -43,7 +43,10 @@ def validate_experiment(
     out: list[Check] = []
     if not experiment.is_dir():
         return [Check("error", "folder", f"{experiment} is not a folder.")]
-    layout = discover(experiment)
+    try:
+        layout = discover(experiment)
+    except BuzzPhonoError as exc:
+        return [Check("error", "tracking", str(exc))]
     n = len(layout.chunks)
     if n == 0:
         out.append(
@@ -51,7 +54,10 @@ def validate_experiment(
         )
         return out
     for kind in ("resting", "moving", "tracks"):
-        missing = layout.missing(kind)
+        # missing() is empty both when every chunk has the kind and when its folder is absent
+        missing = (
+            layout.missing(kind) if layout.folders_present.get(kind) else [c.chunk_id for c in layout.chunks]
+        )
         if not missing:
             out.append(Check("ok", "tracking", f"{n} chunks have {kind} files."))
         elif len(missing) == n:
