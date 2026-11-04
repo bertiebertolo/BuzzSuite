@@ -593,24 +593,26 @@ def build_parser():
     # phono
     ph = sub.add_parser("phono", help="Run BuzzPhono (speaker-distance phonotaxis) on an experiment.")
     ph.add_argument("--experiment", "-e", required=True, help="Experiment dir (or its experiment_*.json).")
-    ph.add_argument("--start", default=None, help="ISO start (default: auto-derived from segments).")
-    ph.add_argument("--end", default=None, help="ISO end (default: auto-derived from segments).")
-    ph.add_argument("--zones", default=None, help="custom_zones.json path (default: <exp>/custom_zones.json).")
+    ph.add_argument("--start", default=None, help="ISO start (default: all recorded data).")
+    ph.add_argument("--end", default=None, help="ISO end, exclusive (default: all recorded data).")
+    ph.add_argument("--zones", default=None, help="Ignored: BuzzPhono reads <exp>/buzzphono_calibration.json "
+                    "(imported from custom_zones.json on first use); change zones with `buzzphono calibrate`.")
     ph.add_argument("--on-start", type=int, default=40, help="Stimulus ON window start minute (default 40).")
     ph.add_argument("--on-end", type=int, default=50, help="Stimulus ON window end minute (default 50).")
     ph.add_argument("--off-start", type=int, default=28, help="Stimulus OFF (baseline) start minute (default 28).")
     ph.add_argument("--off-end", type=int, default=38, help="Stimulus OFF (baseline) end minute (default 38).")
     ph.add_argument("--resting-only", action="store_true",
-                    help="Only the resting speaker-proportion pass (skip trajectory/heatmap pass; faster).")
-    ph.add_argument("--force", action="store_true", help="Regenerate even if outputs are newer than tracking data.")
+                    help="Only the speaker-zone resting fraction (skip the companion analyses; faster).")
+    ph.add_argument("--force", action="store_true",
+                    help="Ignored: BuzzPhono always writes a new results folder and rebuilds only stale cache files.")
     ph.set_defaults(func=cmd_phono)
 
     # phono-flight
     pf = sub.add_parser("phono-flight", help="Flight-based phonotaxis (arousal; speaker wall vs the other walls).")
     pf.add_argument("experiment", help="Experiment dir (or its experiment_*.json).")
     pf.add_argument("--zones", default=None,
-                    help="Zones JSON with 'speaker' + 3 control zones (default: <exp>/custom_zones.json, else "
-                         "<exp>/plots/flight_phonotaxis/custom_zones_flight.json).")
+                    help="Ignored: BuzzPhono reads <exp>/buzzphono_calibration.json (the speaker plus three "
+                         "wall zones); change zones with `buzzphono calibrate`.")
     pf.add_argument("--start", default=None, help="Analysis start, e.g. 2026-10-11 (default: all recorded data).")
     pf.add_argument("--end", default=None, help="Analysis end, exclusive (default: all recorded data).")
     pf.add_argument("--on-start", type=int, default=40, help="Tone ON start minute (default 40).")
@@ -620,13 +622,13 @@ def build_parser():
     pf.add_argument("--light-start", type=int, default=5, help="Lights-on hour (default 5).")
     pf.add_argument("--light-end", type=int, default=17, help="Lights-off hour (default 17).")
     pf.add_argument("--flyer-mult", type=float, default=1.0,
-                    help="Flyer-threshold multiplier (default 1.0; other values go to flyer_x<value>/).")
+                    help="Flyer-threshold multiplier (default 1.0; recorded in the run's settings).")
     pf.add_argument("--min-median", type=float, default=0.0,
                     help="Minimum sustained movement: median step >= this x camera scale px/frame (0 = off, "
-                         "default; 3 for dense cages such as Bangkok). Output goes to flyer_med<value>/.")
+                         "default; 3 for dense cages such as Bangkok).")
     pf.add_argument("--radius", type=float, default=0.1, help="Neighbourhood radius in cage widths (default 0.1).")
-    pf.add_argument("--workers", "-w", type=int, default=None, help="Worker processes (default: cores-2, max 8).")
-    pf.add_argument("--out", default=None, help="Output folder (default: <exp>/plots/flight_phonotaxis/).")
+    pf.add_argument("--workers", "-w", type=int, default=None, help="Processes reading files (default 4).")
+    pf.add_argument("--out", default=None, help="Results folder (default: <exp>/plots/buzzphono/).")
     pf.set_defaults(func=cmd_phono_flight)
 
     # export

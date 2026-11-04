@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -140,16 +141,25 @@ def build_run_config(
 
 
 class _Printer:
-    """Progress on stderr: one line per new message (no flicker in logs or the app)."""
+    """Progress on stderr: a line when the stage changes or every 2% within a stage (per-chunk
+    messages would otherwise give thousands of lines in a log)."""
+
+    STEP = 0.02
 
     def __init__(self, quiet: bool) -> None:
         self.quiet = quiet
-        self.last = ""
+        self.stage = ""
+        self.shown = -1.0
 
     def __call__(self, fraction: float, message: str) -> None:
-        if self.quiet or message == self.last:
+        if self.quiet:
             return
-        self.last = message
+        stage = re.sub(r"\d+", "#", message)
+        if stage == self.stage and fraction < self.shown + self.STEP and fraction < 1.0:
+            return
+        if (stage, fraction) == (self.stage, self.shown):
+            return
+        self.stage, self.shown = stage, fraction
         typer.echo(f"[{fraction:6.1%}] {message}", err=True)
 
 
@@ -225,6 +235,17 @@ def analyse(
         raise DataError(
             "No usable hour-cycle in any experiment, so there are no results to report.",
             hint="Check the analysis window (start/end), the frame rate and the warnings above.",
+        )
+    skipped = [w for e in result.experiments for w in e.warnings if w.startswith("flight analysis skipped")]
+    if (
+        skipped
+        and set(cfg.analyses) <= {"resting_fraction", "flight"}
+        and not any(k.startswith("flight/") for e in result.experiments for k in e.tables)
+    ):
+        job.finish("failed", None, 4)
+        raise DataError(
+            "The flight analysis was requested but could not run: " + skipped[0].split(": ", 1)[1] + ".",
+            hint="See the guide, section 4.10, for what the flight analysis needs.",
         )
     if bad > max_bad_chunks:
         job.finish("failed", None, 4)
@@ -529,7 +550,14 @@ def app_cmd(
 
 # ----------------------------------------------------------------------------- cache
 @cache_app.command("info")
-def cache_info(experiment: Path, cache: Path | None = typer.Option(None, "--cache")) -> None:
+def cache_info(
+    experiment: Path,
+    cache: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="The cache root given to analyse --cache (default: <experiment>/plots/buzzphono/cache).",
+    ),
+) -> None:
     """What the cache holds for this experiment."""
     from buzzphono.io.cache import CacheIndex, cache_dir_for
     from buzzphono.io.discover import discover
@@ -551,7 +579,14 @@ def cache_info(experiment: Path, cache: Path | None = typer.Option(None, "--cach
 
 
 @cache_app.command("verify")
-def cache_verify(experiment: Path, cache: Path | None = typer.Option(None, "--cache")) -> None:
+def cache_verify(
+    experiment: Path,
+    cache: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="The cache root given to analyse --cache (default: <experiment>/plots/buzzphono/cache).",
+    ),
+) -> None:
     """Check every cached chunk still matches its tracking file and loads."""
     from buzzphono.io.cache import CacheIndex, cache_dir_for, load_npz, source_identity
     from buzzphono.io.discover import discover
@@ -581,7 +616,11 @@ def cache_verify(experiment: Path, cache: Path | None = typer.Option(None, "--ca
 @cache_app.command("clean")
 def cache_clean(
     experiment: Path,
-    cache: Path | None = typer.Option(None, "--cache"),
+    cache: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="The cache root given to analyse --cache (default: <experiment>/plots/buzzphono/cache).",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
     """Delete this experiment's cache (the tracking files are never touched)."""

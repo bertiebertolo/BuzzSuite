@@ -33,7 +33,8 @@ BuzzPhono has its own Python environment, `buzzphono_env` (Python 3.12). It does
 BuzzWatch's `buzzsuite_env`. You need [Miniconda](https://docs.conda.io/en/latest/miniconda.html)
 or Anaconda.
 
-In a terminal, in the BuzzSuite folder:
+In a terminal (on Windows: Anaconda Prompt, or any terminal where `conda` works), in the BuzzSuite
+folder:
 
 ```bash
 conda env create -f environment-buzzphono.yml
@@ -84,11 +85,20 @@ The `--open` flag opens the report in your browser when the run finishes.
 The simulated files have the same format as BuzzWatch's (at 2 frames per second, stated in each
 cage's `buzzwatch_track_settings.yml`), so the demo exercises the whole pipeline except the flight
 analysis (which needs 25-fps video). Each demo cage also holds a `pi_config.ini` and a `sound.log`.
-Try them with `buzzphono validate` (section 3) to see the Pi checks.
+Try them with
+`buzzphono validate buzzphono_demo/tone --pi-config buzzphono_demo/tone/pi_config.ini --playback-log buzzphono_demo/tone/sound.log`
+to see the Pi checks (section 10 lists the options).
 
 **Where the results are:** `buzzphono_demo/results/<date-time>-<id>/`. Without `--open`, open
 `report.html` there in any browser, or run `buzzphono report <that folder>`. The run's folder is
-printed at the end of the run.
+printed at the end of the run. The demo keeps its cache in `buzzphono_demo/cache/`; inspect it with
+`buzzphono cache info buzzphono_demo/tone --cache buzzphono_demo/cache`.
+
+**Disk space:** the 72-hour demo takes about 1.7 GB (simulated tracking files, cache and figures).
+Delete the `buzzphono_demo` folder when you are done.
+
+**Dawn and dusk say "not tested (fewer than 4 cycles)"** even in the demo. Each contributes one hour
+per day, and 72 hours has only three. This is expected; the all-phase row carries the conclusion.
 
 ![Speaker-zone resting fraction, ON vs OFF, in the simulated tone cage](images/demo_resting_on_vs_off.png)
 
@@ -603,16 +613,16 @@ workers: null                   # processes reading files (default: suits the dr
 
 | command | what it does |
 |---|---|
-| `buzzphono analyse [FOLDERS] [-c settings.yml] [-a list\|all] [--clock …] [-o DIR] [--workers N] [--open]` | run analyses |
-| `buzzphono validate FOLDER [--pi-config config.ini] [--playback-log sound.log]` | pre-flight checklist |
+| `buzzphono analyse [FOLDERS] [-c settings.yml \| --batch batch.yml] [-a list\|all] [--clock corrected\|nominal\|thesis] [-o DIR] [--cache DIR] [-w N] [--label NAME] [--colony N] [--run-dir DIR] [--max-bad-chunks N] [--no-figures] [--open] [-q]` | run analyses |
+| `buzzphono validate FOLDER [--pi-config config.ini] [--playback-log sound.log] [--on 40-50] [--frequency HZ]` | pre-flight checklist |
 | `buzzphono calibrate FOLDER [--speaker "x,y x,y …"] [--control "name=x,y …"] [--cage …] [--width-mm W --height-mm H] [--click]` | write the calibration |
-| `buzzphono demo [FOLDER] [--hours H] [--open]` | simulated experiments with a known effect |
-| `buzzphono app` | open the app |
+| `buzzphono demo [FOLDER] [--hours H] [--seed N] [--open] [-q]` | simulated experiments with a known effect |
+| `buzzphono app [--port N] [--headless]` | open the app (`--headless`: serve it without opening a browser) |
 | `buzzphono compare RUN… -o DIR` | compare earlier runs |
 | `buzzphono plot RUN` | redraw a run's figures from its tables |
-| `buzzphono report RUN` | open a run's report |
-| `buzzphono status RUN [--cancel]` | a run's progress; ask it to stop |
-| `buzzphono cache info\|verify\|clean FOLDER` | inspect, check or delete the cache |
+| `buzzphono report RUN [--open\|--no-open]` | open a run's report (`--no-open` only prints its path) |
+| `buzzphono status RUN [--cancel]` | a run's progress; ask it to stop (runs started with `analyse` or the app; the demo keeps no status) |
+| `buzzphono cache info\|verify\|clean FOLDER [--cache DIR]` | inspect, check or delete the cache (`--cache`: the folder given to `analyse --cache`) |
 
 **Exit codes:**
 

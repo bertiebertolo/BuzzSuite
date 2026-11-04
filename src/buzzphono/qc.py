@@ -14,7 +14,6 @@ The checks guard against the known ways phonotaxis numbers go wrong:
 
 from __future__ import annotations
 
-import itertools
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -134,14 +133,21 @@ def layout_findings(
                     )
                 )
     # overlapping sessions (the clock went back, or two recordings of one cage were mixed)
+    # Frame counts come from the cache; before the first analysis there are none, and the chunk
+    # indices at the full chunk length are used instead.
     spans = []
     for s, sf in sessions.items():
-        if sf.nf:
-            end = sf.start_ns + int((sf.first_frame(max(sf.nf)) + sf.nf[max(sf.nf)]) / sf.fps * NS_PER_S)
-            spans.append((sf.start_ns + int(sf.first_frame(min(sf.nf)) / sf.fps * NS_PER_S), end, s))
+        indices = sorted(sf.nf) or sorted(c.index for c in by_session.get(s, []))
+        if not indices:
+            continue
+        last = indices[-1]
+        end = sf.start_ns + int((sf.first_frame(last) + sf.nf.get(last, sf.nf_full)) / sf.fps * NS_PER_S)
+        spans.append((sf.start_ns + int(sf.first_frame(indices[0]) / sf.fps * NS_PER_S), end, s))
     spans.sort()
-    for (_a0, a1, sa), (b0, _b1, sb) in itertools.pairwise(spans):
-        if b0 < a1 - 60 * NS_PER_S:
+    reach = None  # the session reaching furthest so far: (end, name)
+    for b0, b1, sb in spans:
+        if reach is not None and b0 < reach[0] - 60 * NS_PER_S:
+            a1, sa = reach
             out.append(
                 Finding(
                     "error",
@@ -151,6 +157,8 @@ def layout_findings(
                     "different runs are mixed in one folder.",
                 )
             )
+        if reach is None or b1 > reach[0]:
+            reach = (b1, sb)
     # daylight saving (Europe: last Sunday of March and October)
     for s, (start_ns, end_ns) in {sp[2]: (sp[0], sp[1]) for sp in spans}.items():
         t0, t1 = from_ns(start_ns), from_ns(end_ns)

@@ -5,7 +5,7 @@
 #     conda env create -f environment-buzzphono.yml
 # then check it with:
 #     conda activate buzzphono_env
-#     buzzphono demo
+#     buzzphono --version
 #
 # Everything except Python itself comes from PyPI wheels (pinned in constraints-buzzphono.txt).
 # The conda-forge numpy/matplotlib builds crash on some Windows PCs (Memory Integrity + CET);
