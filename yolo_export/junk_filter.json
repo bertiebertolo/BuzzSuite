@@ -1,0 +1,21 @@
+{
+ "threshold": 0.4417478884526077,
+ "keep_real_cv": 0.850253807106599,
+ "false_removed_cv": 0.712280701754386,
+ "auc_cv": 0.8585403864992431,
+ "n_real": 394,
+ "n_false": 285,
+ "features": [
+  "supported",
+  "contrast",
+  "rcontrast",
+  "mcontrast",
+  "edge_suspect",
+  "comp_w_cw",
+  "comp_h_cw",
+  "comp_area_cw2",
+  "comp_nlabels",
+  "track_frac"
+ ],
+ "trained_on": "gold set 2026-11-06 (test days of Penzance_Aedes_M_20260911 and Tbambusa_M_510Hz_20261010)"
+}

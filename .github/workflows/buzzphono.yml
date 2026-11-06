@@ -1,0 +1,100 @@
+name: BuzzPhono CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/buzzphono/**"
+      - "tests/buzzphono/**"
+      - "tools/**"
+      - "pyproject.toml"
+      - "constraints-buzzphono.txt"
+      - ".github/workflows/buzzphono.yml"
+  pull_request:
+    paths:
+      - "src/buzzphono/**"
+      - "tests/buzzphono/**"
+      - "tools/**"
+      - "pyproject.toml"
+      - "constraints-buzzphono.txt"
+      - ".github/workflows/buzzphono.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: buzzphono-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MPLBACKEND: Agg
+  HYPOTHESIS_PROFILE: ci
+  PYTHONUTF8: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: constraints-buzzphono.txt
+      - name: Install
+        run: python -m pip install -e ".[app,dev]" -c constraints-buzzphono.txt
+      - name: Ruff (lint)
+        run: ruff check src tests tools
+      - name: Ruff (format)
+        run: ruff format --check src tests tools
+      - name: Mypy
+        run: mypy
+
+  pi-tool:
+    name: Pi log collector (Python ${{ matrix.python }}, stdlib only)
+    runs-on: ubuntu-latest
+    # the official Python images: Raspberry Pi OS ships 3.9 (bullseye) or 3.11 (bookworm)
+    container: python:${{ matrix.python }}-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile
+        run: python -m py_compile tools/pi_collect_logs.py
+      - name: Self-test
+        run: python -I tools/pi_collect_logs.py --self-test
+
+  test:
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.12", pinned: true }
+          - { os: windows-latest, python: "3.12", pinned: true }
+          - { os: macos-latest, python: "3.12", pinned: true }
+          - { os: ubuntu-latest, python: "3.10", pinned: false }
+          - { os: ubuntu-latest, python: "3.13", pinned: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            constraints-buzzphono.txt
+      - name: Install (pinned versions)
+        if: matrix.pinned
+        run: python -m pip install -e ".[app,dev]" -c constraints-buzzphono.txt
+      - name: Install (latest compatible versions)
+        if: ${{ !matrix.pinned }}
+        run: python -m pip install -e ".[app,dev]"
+      - name: Tests
+        run: >
+          python -m pytest -m "not slow and not golden and not realdata and not browser"
+          --cov=buzzphono --cov-report=term

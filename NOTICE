@@ -1,0 +1,7 @@
+BuzzSuite
+Copyright (c) 2026 Alberto Thornton
+
+This software is licensed under the MIT License (see LICENSE).
+
+BuzzSuite is derived from the BuzzWatch app, hence the name of its tracking package,
+`buzzwatch_data_analysis/`, did not change.
