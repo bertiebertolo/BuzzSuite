@@ -107,6 +107,23 @@ def read_status(run_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+ENDED = ("done", "failed", "cancelled")
+
+
+def mark_ended(run_dir: Path, state: str, message: str) -> None:
+    """Record the end of a run whose process was ended from outside and so never reached
+    :meth:`Job.finish` (a hard kill after Cancel). Only in a run folder; a recorded end is kept."""
+    if not is_run_dir(run_dir):
+        return
+    status = read_status(run_dir) or {}
+    if status.get("state") in ENDED:
+        return
+    status.update(state=state, message=message, updated=_now())
+    if state == "failed":
+        status.setdefault("error", message)
+    atomic_write_text(run_dir / STATUS, json.dumps(status, indent=1))
+
+
 # Everything a run writes into its folder. Clean-up deletes only these, never anything else.
 RUN_OUTPUTS = ("experiments", "pooled", "report.html", "report.pdf", "run_manifest.json")
 MARKER = ".buzzphono_run"  # written when BuzzPhono creates a run folder; required before any clean-up
@@ -139,7 +156,7 @@ def check_run_dir(run_dir: Path) -> None:
             hint="Choose a new or empty folder for the results.",
         )
     status = read_status(run_dir) or {}
-    if (run_dir / "run_manifest.json").exists() or status.get("state") in ("done", "failed", "cancelled"):
+    if (run_dir / "run_manifest.json").exists() or status.get("state") in ENDED:
         raise ConfigError(
             f"{run_dir} already holds a finished run.",
             hint="Choose a new folder; earlier results are never overwritten or deleted.",

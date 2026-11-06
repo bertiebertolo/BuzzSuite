@@ -47,11 +47,34 @@ def _load():
         if not os.path.exists(MODEL):
             _cache["m"] = None
         else:
-            with open(MODEL, "rb") as f:
-                _cache["m"] = pickle.load(f)
+            try:
+                with open(MODEL, "rb") as f:
+                    m = pickle.load(f)
+            except Exception as exc:  # noqa: BLE001 -- a scikit-learn pickle loads only in a matching version
+                import sklearn
+                raise RuntimeError(
+                    "The junk-filter model %s could not be loaded with scikit-learn %s (%s: %s). It was saved "
+                    "with the scikit-learn pinned in environment.yml (1.3.2): run yolo_export in buzzwatch_env, "
+                    "or retrain it here with junk_filter.train()." % (MODEL, sklearn.__version__,
+                                                                      type(exc).__name__, exc))
             with open(META) as f:
                 _cache["meta"] = json.load(f)
+            _cache["m"] = m
     return _cache["m"], _cache.get("meta")
+
+
+def available():
+    """True when the trained model file is present (it ships with the repository)."""
+    return _load()[0] is not None
+
+
+def require():
+    """Raise when the model is missing: a build that claims the junk filter must not quietly skip it."""
+    if not available():
+        raise RuntimeError(
+            "policy.junk_filter is on but the junk-filter model %s is missing, so false resting labels "
+            "would go into the dataset unfiltered. Restore it from the repository (git checkout -- "
+            "yolo_export/junk_filter_model.pkl) or retrain it with junk_filter.train()." % MODEL)
 
 
 def threshold():

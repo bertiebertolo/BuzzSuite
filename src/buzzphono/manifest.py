@@ -80,6 +80,7 @@ def _inputs(result: RunResult) -> list[dict[str, Any]]:
                 "label": e.label,
                 "path": str(e.spec.path),
                 "clock": e.clock_message,
+                "light": e.light,
                 "ingest": e.ingest,
                 "n_cycles": len(e.cycles),
                 "n_usable_cycles": int(e.cycles["usable"].sum()) if len(e.cycles) else 0,

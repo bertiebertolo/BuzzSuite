@@ -313,23 +313,108 @@ def parse_windows(text):
     return out
 
 
+# {cage}_{YYYYMMDD}_{HHMMSS}[-{attempt}]_{NNNNN}. The Pi recorder adds '-{attempt}' when a session
+# name already exists (its clock went backwards); see src/buzzphono/io/naming.py (STEM_RE).
+_STEM_RE = re.compile(r"^(?P<cage>.+)_(?P<date>\d{8})_(?P<time>\d{6})(?:-(?P<attempt>\d+))?_(?P<seg>\d+)$")
+
+
 def parse_stem(stem):
-    """{'cage', 'session_date', 'session_time', 'segment_int', ...} for a segment stem, or None."""
-    from tracking_export import _parse_segment_name
-    return _parse_segment_name(stem)
+    """{'cage', 'session_date', 'session_time', 'attempt', 'segment_int'} for a segment stem, or None."""
+    base = os.path.basename(stem)
+    if base.startswith(TRACK_PREFIX):
+        base = base[len(TRACK_PREFIX):]
+    m = _STEM_RE.match(base)
+    if not m:
+        return None
+    return {"cage": m.group("cage"), "session_date": m.group("date"), "session_time": m.group("time"),
+            "attempt": int(m.group("attempt")) if m.group("attempt") else None,
+            "segment_int": int(m.group("seg"))}
 
 
 def session_key(stem):
+    """('YYYYMMDD_HHMMSS[-attempt]', segment index), or (None, None) for a name that does not parse.
+    The attempt stays in the key so a repeated session name is its own session; the first 15
+    characters are always the session's start time (clock._s0)."""
     p = parse_stem(stem)
     if not p:
         return None, None
-    return "%s_%s" % (p["session_date"], p["session_time"]), p["segment_int"]
+    key = "%s_%s" % (p["session_date"], p["session_time"])
+    if p["attempt"] is not None:
+        key += "-%d" % p["attempt"]
+    return key, p["segment_int"]
+
+
+# Everything a BuzzWatch tracking file holds (as src/buzzphono/io/safe_pickle.py allows): the tracker
+# class, standard containers, datetime and numpy. pandas/pyarrow objects (only the final files'
+# population_variables table, which yolo_export never reads) load as inert placeholders.
+_PICKLE_ALLOWED = {
+    ("buzzwatch_data_analysis.mosquito_obj_tracker", "mosquito_obj_tracker"),
+    ("collections", "OrderedDict"), ("collections", "defaultdict"),
+    ("builtins", "slice"), ("builtins", "bytearray"), ("builtins", "set"), ("builtins", "frozenset"),
+    ("builtins", "complex"),
+    ("datetime", "datetime"), ("datetime", "date"), ("datetime", "time"), ("datetime", "timedelta"),
+    ("datetime", "timezone"),
+    ("numpy", "ndarray"), ("numpy", "dtype"),
+    ("numpy.core.multiarray", "_reconstruct"), ("numpy.core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "scalar"),
+    ("_codecs", "encode"),
+}
+
+
+class _PandasPlaceholder(object):
+    """Inert stand-in for any pandas object inside a tracking pickle."""
+
+    def __new__(cls, *args, **kwargs):
+        return object.__new__(cls)
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __setstate__(self, state):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return _PandasPlaceholder()
+
+
+def _pandas_factory(*args, **kwargs):
+    return _PandasPlaceholder()
+
+
+def _tracking_unpickler(fh):
+    import pickle
+
+    class _Restricted(pickle.Unpickler):
+        def find_class(self, module, name):
+            if (module, name) in _PICKLE_ALLOWED:
+                try:
+                    return super(_Restricted, self).find_class(module, name)
+                except ImportError:  # a numpy-2 pickle read with numpy 1
+                    if module.startswith("numpy._core"):
+                        return super(_Restricted, self).find_class(
+                            module.replace("numpy._core", "numpy.core"), name)
+                    raise
+            if module == "numpy.dtypes":
+                import numpy.dtypes as nd  # numpy >= 1.25 only
+                if isinstance(getattr(nd, name, None), type):
+                    return getattr(nd, name)
+            if module.split(".")[0] in ("pandas", "pyarrow"):
+                return _PandasPlaceholder if name[:1].isupper() else _pandas_factory
+            raise pickle.UnpicklingError("unexpected object %s.%s: not a BuzzWatch tracking file" % (module, name))
+
+    return _Restricted(fh)
 
 
 def load_tracking(path):
-    """The frozen tracker object (compat unpickler from the BuzzSwarm engine), or None."""
-    from buzzswarm.fru2_zt_normalized_analysis import load_tracking_file
-    return load_tracking_file(path)
+    """The frozen tracker object, or None if the file is unreadable. Loaded with an allow-listed
+    unpickler: a plain pickle.load would run whatever code a tampered file asks for, and the data
+    roots are discovered on any mounted drive."""
+    try:
+        with open(path, "rb") as fh:
+            return _tracking_unpickler(fh).load()
+    except Exception as exc:  # noqa: BLE001
+        log_default("  ! load failed %s: %s" % (path, exc))
+        return None
 
 
 def write_json(path, obj):

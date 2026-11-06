@@ -1,0 +1,45 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- OS junk ---
+._*
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+
+# --- BuzzSuite local/live state (machine- and experiment-specific) ---
+config.json
+logs/
+plots/
+glmm_results/
+graphify-out/
+tmp*
+*_log.txt
+*_err.txt
+*.pkl
+!yolo_export/junk_filter_model.pkl
+# ^ the trained junk filter ships with the code (yolo_export/junk_filter.py)
+*.mp4
+
+# --- Vendored ffmpeg binaries (see h264_converter/ffmpeg/README.md) ---
+h264_converter/ffmpeg/bin/**
+!h264_converter/ffmpeg/bin/**/.gitkeep
+
+# --- Editor / agent state ---
+.claude/
+.vscode/
+.idea/
+*.lnk

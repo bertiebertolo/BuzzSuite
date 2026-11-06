@@ -74,7 +74,8 @@ def experiment_figures(res: ExperimentResult, ctx: Any, config: AnalysisConfig) 
                 dpi,
             )
     if "zt_profile/hour_of_day" in t and len(t["zt_profile/hour_of_day"]):
-        lh = (int(config.light.lights_on[:2]), int(config.light.lights_off[:2]))
+        light = getattr(ctx, "light", None) or config.light  # the schedule the analyses used
+        lh = (int(light.lights_on[:2]), int(light.lights_off[:2]))
         _try(
             out,
             res,

@@ -113,5 +113,9 @@ def segment_infos(out_dir, rig, alias, stems=None):
         if n.endswith(".json") and (stems is None or n[:-5] in stems):
             info = C.read_json(os.path.join(d, n))
             if info:
-                out.append((n[:-5], info))
+                if info.get("session") is None or info.get("k") is None:
+                    # written before '-<attempt>' stems were parsed: take them from the name now
+                    info["session"], info["k"] = C.session_key(n[:-5])
+                if info["session"] is not None:  # an unparseable name has no time: leave it out
+                    out.append((n[:-5], info))
     return out

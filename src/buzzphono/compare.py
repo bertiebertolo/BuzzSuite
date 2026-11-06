@@ -173,6 +173,15 @@ def redraw(run: Path) -> list[Path]:
         cyc = tables.get("cycles/cycle_table", pd.DataFrame())
         good = cyc[cyc["usable"].astype(bool)] if len(cyc) else cyc
         res = SimpleNamespace(label=info["label"], tables=tables, out_dir=folder, extras={}, warnings=[])
-        ctx = SimpleNamespace(good=good, windows=windows, cal=None)
+        own = info.get("light") or {}  # the schedule the run used (the Pi's, when it differed)
+        ctx = SimpleNamespace(
+            good=good,
+            windows=windows,
+            cal=None,
+            light=SimpleNamespace(
+                lights_on=own.get("lights_on", config.light.lights_on),
+                lights_off=own.get("lights_off", config.light.lights_off),
+            ),
+        )
         paths += experiment_figures(res, ctx, config)  # type: ignore[arg-type]
     return paths

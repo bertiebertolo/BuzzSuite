@@ -121,7 +121,8 @@ def label_boxes(L, med, defs, cw=None):
         keep &= ~sat
     junk = np.zeros(len(L), bool)
     if cw and pol.get("junk_filter"):
-        p = JF.score(L, cw)                      # NaN without a model file: nothing dropped
+        JF.require()                             # never a silent no-op (build() checks this up front too)
+        p = JF.score(L, cw)
         junk = keep & (L.cls.values == 0) & (p < JF.threshold() if np.isfinite(p).any() else False)
         keep &= ~junk
     L["junk"] = junk
@@ -460,13 +461,24 @@ def build(out_dir, rows, selection, workers=None, single_class=False, log=C.log_
     defs = C.definitions()
     tsize = int(defs["tiles"]["size"])
     margin = float(defs["tiles"]["roi_margin_px"])
-    all_frames, all_tiles, report = [], [], {"experiments": {}}
+    junk_on = bool(defs["policy"].get("junk_filter"))
+    if junk_on:
+        JF.require()  # before anything is written
+    all_frames, all_tiles = [], []
+    report = {"experiments": {}, "junk_filter": {"applied": junk_on,
+                                                 "threshold": JF.threshold() if junk_on else None}}
     for row in rows:
         alias = row["alias"]
         stems = I.segment_set(row)
         F = FR.load_meta(out_dir, alias, "frames", stems)
         if F is None or not len(F):
             continue
+        if F.session.isna().any() or F.k.isna().any():  # meta written before '-<attempt>' stems parsed
+            keys = [C.session_key(s) for s in F.stem]
+            F = F.assign(session=[a for a, _ in keys], k=[b for _, b in keys])
+            F = F[F.session.notna()].reset_index(drop=True)
+            if not len(F):
+                continue
         L = FR.load_meta(out_dir, alias, "labels", stems)
         if L is not None and len(L) and ("mcontrast" not in L or L.mcontrast.isna().any()):
             raise RuntimeError("%s: some labels meta has no motion contrast (made before generator 1.1), "
@@ -562,6 +574,15 @@ def build(out_dir, rows, selection, workers=None, single_class=False, log=C.log_
                    {int(k): n for k, n in defs["classes"].items()}, v)
     if single_class:
         _single_class_copies(out_dir, log)
+
+    # Only tiles that were actually written (write_tiles skips a frame whose PNG is unreadable and
+    # reports it in errs) can be calibration tiles or count as written in the tables below.
+    img_dir = os.path.join(out_dir, "yolo", VARIANTS[0], "images")
+    T["written"] = [bool(s) and os.path.isfile(os.path.join(img_dir, sp, tid + ".png"))
+                    for s, sp, tid in zip(T.selected, T.split, T.tile_id)]
+    if errs:
+        log("  ! %d frame(s) could not be read; their tiles were left out (first: %s)" % (len(errs), errs[0]))
+    sel = T[T.written]
 
     # calibration tiles: stratified over experiment x light phase, labelled train tiles first
     calib = _pick_calib(sel, 1024)

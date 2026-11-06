@@ -6,10 +6,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from buzzphono import jobs
 from buzzphono.app.common import (
     ANALYSES,
     experiments,
+    job_status,
     new_run_dir,
     page,
     settings_from_state,
@@ -88,10 +88,16 @@ except BuzzPhonoError as exc:
     st.error(str(exc))
     valid = False
 job = st.session_state.get("job")
-running = job is not None and (jobs.read_status(Path(job["run_dir"])) or {}).get("state") == "running"
+running = job is not None and job_status(job).get("state") in ("running", "starting")
 if st.button("Run", type="primary", disabled=not valid or not picked or running):
-    start_job(settings, new_run_dir(settings))
-    st.rerun()
+    try:
+        start_job(settings, new_run_dir(settings))
+    except BuzzPhonoError as exc:
+        st.error(exc.message)
+        if exc.hint:
+            st.info(exc.hint)
+    else:
+        st.rerun()
 
 
 @st.fragment(run_every="1s")
@@ -100,7 +106,7 @@ def follow() -> None:
     if not job:
         return
     run_dir = Path(job["run_dir"])
-    status = jobs.read_status(run_dir) or {"state": "starting", "progress": 0.0, "message": "Starting…"}
+    status = job_status(job)
     st.progress(float(status.get("progress", 0.0)), text=str(status.get("message", "")))
     state = status.get("state")
     if state in ("running", "starting"):

@@ -57,6 +57,7 @@ class ExperimentResult:
     warnings: list[str] = field(default_factory=list)
     ingest: dict[str, Any] = field(default_factory=dict)
     extras: dict[str, Any] = field(default_factory=dict)  # in-memory objects for figures (not written)
+    light: dict[str, str] = field(default_factory=dict)  # the light schedule used (settings or Pi config)
 
 
 @dataclass
@@ -226,6 +227,12 @@ def _run_experiment(
     if config.stimulus.pi_config is not None:
         light, pi_warnings = _pi_config_checks(config, cal, layout)
         warnings += pi_warnings
+        if (light.lights_on, light.lights_off) != (config.light.lights_on, config.light.lights_off):
+            warnings.append(
+                f"light schedule taken from the Pi config: lights on {light.lights_on}, off "
+                f"{light.lights_off} (settings: {config.light.lights_on}/{config.light.lights_off}); every "
+                "analysis uses it"
+            )
     speaker_name = config.metric.speaker_zone
     if speaker_name not in {z.name for z in cal.zones}:
         speaker_name = cal.speaker.name
@@ -290,6 +297,7 @@ def _run_experiment(
             "errors": len(report.errors),
             "seconds": report.seconds,
         },
+        light={"lights_on": light.lights_on, "lights_off": light.lights_off},
     )
     res.tables["cycles/cycle_table"] = cycles
     if eclock.fit is not None and len(eclock.fit.bursts):
@@ -320,6 +328,7 @@ def _run_experiment(
         steps.sub(0.65, 1.0),
         steps.cancel,
         fps,
+        light,
     )
     analyses = list(dict.fromkeys(config.analyses)) if len(good) else []
     if not len(good):
@@ -498,6 +507,7 @@ class _Ctx:
     say: Progress
     cancel: CancelFn | None
     fps: float = 25.0
+    light: LightSettings = field(default_factory=LightSettings)  # resolved: settings, or the Pi's ramps
 
     def compare(
         self, a: str, b: str, label: str, data: pd.DataFrame | None = None, **kw: Any
@@ -636,7 +646,7 @@ def _psth(ctx: _Ctx) -> None:
 def _zt(ctx: _Ctx) -> None:
     from buzzphono.metrics.zt_profile import hour_of_day_profile, minute_series
 
-    on_h = int(ctx.config.light.lights_on.split(":")[0])
+    on_h = int(ctx.light.lights_on.split(":")[0])
     ctx.res.tables["zt_profile/hour_of_day"] = hour_of_day_profile(
         ctx.good,
         lights_on_hour=on_h,
@@ -788,7 +798,7 @@ def _sensitivity(ctx: _Ctx) -> None:
         colony=ctx.config.metric.colony_size,
         on=on,
         off=off,
-        phases=ctx.config.light.phases(),
+        phases=ctx.light.phases(),
         coverage=Coverage(cov.min_frame_fraction, cov.max_gap_s, cov.min_minutes_with_resting),
         px_per_mm=px_per_mm,
         plan=plan,
@@ -805,7 +815,7 @@ def _flight(ctx: _Ctx) -> None:
 
     f = ctx.config.flight
     on, off = ctx.windows["on"], ctx.windows["off"]
-    lh = (int(ctx.config.light.lights_on.split(":")[0]), int(ctx.config.light.lights_off.split(":")[0]))
+    lh = (int(ctx.light.lights_on.split(":")[0]), int(ctx.light.lights_off.split(":")[0]))
     params = FlightParams(
         on=on,
         off=off,

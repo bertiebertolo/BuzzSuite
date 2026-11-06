@@ -4,7 +4,6 @@ All phonotaxis analysis now lives in the BuzzPhono package (buzzphono_env). This
 BuzzPhono app in the browser, or runs the main analyses on an experiment in the background and
 follows its progress (the run's status.json), with a Cancel button. It never imports BuzzPhono.
 """
-import json
 import os
 import time
 import tkinter as tk
@@ -25,6 +24,7 @@ class BuzzphonoLauncherTab(object):
         self.log = getattr(ui_manager, "log", print)
         self.proc = None
         self.run_dir = None
+        self.cancelling = False
         self.app_proc = None
 
     # ---------------------------------------------------------------- UI
@@ -96,14 +96,23 @@ class BuzzphonoLauncherTab(object):
         if not exp or not os.path.isdir(exp):
             messagebox.showerror("BuzzPhono", "Choose the experiment's analysis folder first.")
             return
-        self.run_dir = os.path.join(exp, "plots", "buzzphono", time.strftime("%Y%m%d-%H%M%S") + "-buzzsuite")
-        os.makedirs(self.run_dir, exist_ok=True)
-        args = ["analyse", exp, "-a", self.analyses_var.get().strip() or DEFAULT_ANALYSES, "--run-dir", self.run_dir, "-q"]
+        stamp = time.strftime("%Y%m%d-%H%M%S") + "-%03d" % (int(time.time() * 1000) % 1000)
+        run_dir = os.path.join(exp, "plots", "buzzphono", stamp + "-buzzsuite")
+        args = ["analyse", exp, "-a", self.analyses_var.get().strip() or DEFAULT_ANALYSES, "--run-dir", run_dir, "-q"]
         try:
-            self.proc = bb.start(args, os.path.join(self.run_dir, "process.log"))
+            bb.buzzphono_command()  # find BuzzPhono before creating anything
+            # Mark the folder as a BuzzPhono run's before process.log goes in: BuzzPhono refuses a
+            # non-empty results folder it cannot prove is its own.
+            bb.claim_run_dir(run_dir)
+            self.proc = bb.start(args, os.path.join(run_dir, "process.log"))
         except bb.BuzzPhonoNotFound as exc:
             messagebox.showerror("BuzzPhono not found", str(exc))
             return
+        except OSError as exc:
+            messagebox.showerror("BuzzPhono", "Could not create the results folder %s:\n%s" % (run_dir, exc))
+            return
+        self.run_dir = run_dir
+        self.cancelling = False
         self.run_btn.config(state=tk.DISABLED)
         self.cancel_btn.config(state=tk.NORMAL)
         self.report_btn.config(state=tk.DISABLED)
@@ -112,8 +121,12 @@ class BuzzphonoLauncherTab(object):
 
     def cancel(self):
         if self.run_dir:
-            with open(os.path.join(self.run_dir, "CANCEL"), "w") as fh:
-                fh.write(time.strftime("%Y-%m-%dT%H:%M:%S"))
+            self.cancelling = True
+            try:
+                with open(os.path.join(self.run_dir, bb.CANCEL), "w") as fh:
+                    fh.write(time.strftime("%Y-%m-%dT%H:%M:%S"))
+            except OSError:
+                pass  # the folder is gone: the kill below still stops the run
             self.status_var.set("Cancelling...")
             self.root.after(10000, self._kill_if_alive)
 
@@ -130,19 +143,19 @@ class BuzzphonoLauncherTab(object):
             webbrowser.open("file:///" + os.path.join(self.run_dir, "report.html").replace("\\", "/"))
 
     def _poll(self):
-        status = {}
-        try:
-            with open(os.path.join(self.run_dir, "status.json"), "r", encoding="utf-8") as fh:
-                status = json.load(fh)
-        except (OSError, ValueError):
-            pass
+        status = bb.read_status(self.run_dir) or {}
         state = status.get("state", "starting")
         self.progress["value"] = float(status.get("progress", 0.0))
         self.status_var.set(status.get("message", "Starting..."))
         alive = self.proc is not None and self.proc.poll() is None
-        if state == "running" or (state == "starting" and alive):
+        if state in ("running", "starting") and alive:
             self.root.after(1000, self._poll)
             return
+        if state in ("running", "starting"):
+            # The process is gone but never recorded an end (killed after Cancel, crashed, out of memory):
+            # one last read in case it finished between the two checks above.
+            status = bb.read_status(self.run_dir) or status
+            state = status.get("state", state)
         self.run_btn.config(state=tk.NORMAL)
         self.cancel_btn.config(state=tk.DISABLED)
         if state == "done":
@@ -151,6 +164,12 @@ class BuzzphonoLauncherTab(object):
             self.log("BuzzPhono done -> %s" % self.run_dir)
         elif state == "cancelled":
             self.status_var.set("Cancelled; partial results were deleted.")
+        elif state == "running" and self.cancelling:
+            self.status_var.set("Cancelled: BuzzPhono was stopped before it could tidy up, so partial results "
+                                "may remain in %s." % self.run_dir)
+        elif state == "running":
+            self.status_var.set("Failed: BuzzPhono stopped unexpectedly (crashed or ran out of memory); "
+                                "see process.log in %s" % self.run_dir)
         else:
             msg = status.get("error") or "BuzzPhono stopped; see process.log in %s" % self.run_dir
             self.status_var.set("Failed: %s" % msg)

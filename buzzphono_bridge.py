@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 ENV_NAME = "buzzphono_env"
 _STRIP = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "CONDA_PYTHON_EXE",
@@ -95,9 +96,35 @@ def run(args, log=None, cwd=None):
 def start(args, log_path, cwd=None):
     """Start ``buzzphono <args>`` in the background (output to ``log_path``); return the Popen."""
     cmd = buzzphono_command() + list(args)
-    fh = open(log_path, "ab")
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    return subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=clean_env(), cwd=cwd, creationflags=flags)
+    with open(log_path, "ab") as fh:  # the child keeps its own handle
+        return subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=clean_env(), cwd=cwd,
+                                creationflags=flags)
+
+
+# BuzzPhono's run-folder protocol (buzzphono/jobs.py), mirrored here because BuzzSuite never imports it.
+RUN_MARKER = ".buzzphono_run"   # jobs.MARKER: only a folder holding it counts as a BuzzPhono run's
+STATUS = "status.json"
+CANCEL = "CANCEL"
+
+
+def claim_run_dir(path):
+    """Create a new, empty run folder and mark it as a BuzzPhono run's (as jobs.claim_run_dir does), so
+    the run accepts it although the launcher has already put process.log there."""
+    os.makedirs(path)  # never an existing folder: earlier results are not reused
+    with open(os.path.join(path, RUN_MARKER), "w", encoding="utf-8") as fh:
+        fh.write("BuzzPhono run folder, created %s by BuzzSuite (process %d)\n"
+                 % (time.strftime("%Y-%m-%dT%H:%M:%S"), os.getpid()))
+    return path
+
+
+def read_status(run_dir):
+    """The run's status.json as a dict, or None while it does not exist (or is being replaced)."""
+    try:
+        with open(os.path.join(run_dir, STATUS), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
 
 
 def write_settings(path, experiment, on=(40, 50), off=(28, 38), start=None, end=None, analyses=None,

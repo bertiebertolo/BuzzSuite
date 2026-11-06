@@ -228,6 +228,8 @@ def build_inventory(out_dir, roots, log=C.log_default):
                 r["cage_width_px"] = round(g["width"], 1)
                 r["has_zones"] = bool(g["zones"])
                 r["zone_names"] = ",".join(g["zones"])
+            else:  # json.dumps([]) is the truthy "[]": without this the row could still be chosen
+                r["reason"] = "no cage border drawn"
         except Exception as exc:  # noqa: BLE001
             r["reason"] = "settings unreadable: %s" % exc
         r["has_schedule"] = os.path.isfile(os.path.join(r["exp_dir"], "ld_dd_schedule.json"))
@@ -375,7 +377,9 @@ def segment_set(row):
 
 
 def segments_of(row):
-    """Sorted segment stems with both tracking and a video, minus duplicates owned elsewhere."""
+    """Sorted segment stems with both tracking and a video, minus duplicates owned elsewhere. A stem
+    whose name gives no session and segment number (so no time) is left out."""
     tracked, _ = _tracked_stems(row["exp_dir"])
     dups = set(json.loads(row.get("dup_segments") or "[]"))
-    return sorted((tracked & _list_mp4_stems(row["video_dir"])) - dups)
+    return sorted(s for s in (tracked & _list_mp4_stems(row["video_dir"])) - dups
+                  if C.session_key(s)[0] is not None)

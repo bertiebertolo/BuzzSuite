@@ -80,13 +80,17 @@ def _pool_map(workers):
     return (lambda fn, jobs: pool.imap_unordered(fn, jobs)), (lambda: (pool.close(), pool.join()))
 
 
-def _segment_jobs(rows, out_dir, limit, force, k_frames):
+def _segment_jobs(rows, out_dir, limit, force, k_frames, log=C.log_default):
     from yolo_export import annotate as AN
     from yolo_export import inventory as I
     defs = C.definitions()
     jobs = []
     for row in rows:
-        geo = AN.job_geometry(row)
+        try:
+            geo = AN.job_geometry(row)
+        except Exception as exc:  # noqa: BLE001 -- one bad experiment must not block the others
+            log("  ! %s skipped: %s" % (row["alias"], exc))
+            continue
         stems = I.segments_of(row)
         if limit and len(stems) > limit:
             pick = np.unique(np.linspace(0, len(stems) - 1, limit).round().astype(int))
@@ -140,10 +144,10 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
             log("  no chosen experiments for this selection (see inventory/inventory.csv)")
             continue
         if step == "annotate":
-            pool_run(AN.annotate_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment),
+            pool_run(AN.annotate_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
                      workers, log, "annotate")
         elif step == "verify":
-            pool_run(VF.verify_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment),
+            pool_run(VF.verify_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
                      workers, log, "verify")
             if "clock" not in steps:
                 for row in rows:                      # refresh the per-experiment events tables
@@ -158,7 +162,7 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
                 except Exception as exc:  # noqa: BLE001
                     log("  ! clock %s: %s" % (row["alias"], exc))
         elif step == "frames":
-            pool_run(FR.frames_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment),
+            pool_run(FR.frames_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
                      workers, log, "frames")
         elif step == "build":
             b_rows = I.chosen_rows(inv, rig=rig, experiments=experiments) if (rig or experiments) else \

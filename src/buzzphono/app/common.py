@@ -113,7 +113,15 @@ def new_run_dir(settings: dict[str, Any]) -> Path:
 
 
 def start_job(settings: dict[str, Any], run_dir: Path) -> subprocess.Popen[bytes]:
-    """Write the settings into the run folder and start the analysis as its own process."""
+    """Write the settings into the run folder and start the analysis as its own process.
+
+    The refusals the run would make before creating its folder (results inside an experiment, the
+    same data twice) are made here first and raise :class:`~buzzphono.errors.BuzzPhonoError`, so
+    nothing is written and the page can show the reason."""
+    from buzzphono import pipeline
+    from buzzphono.config import build_config
+
+    pipeline.preflight(build_config(settings, "these settings"), run_dir)
     jobs.claim_run_dir(run_dir)
     cfg = run_dir / "settings.yml"
     cfg.write_text(yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -156,6 +164,39 @@ def stop_job(run_dir: Path, pid: int | None, grace_s: float = 10.0) -> None:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 getattr(os, "killpg")(pid, 15)  # noqa: B009 (POSIX only)
         jobs.remove_partial_run(run_dir)
+        # killed before it could record its end: record it, or status.json says "running" for ever
+        jobs.mark_ended(
+            run_dir, "cancelled", "Cancelled; the run was stopped and its partial results deleted."
+        )
+
+
+def _process_alive(pid: int) -> bool:
+    if sys.platform != "win32":
+        # Reap our own finished child first: until then it is a zombie, which answers "alive".
+        with contextlib.suppress(ChildProcessError, OSError):
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if done == pid:
+                return False
+    return jobs.pid_alive(pid)
+
+
+def job_status(job: dict[str, Any]) -> dict[str, Any]:
+    """The run's status, or "starting" before status.json exists. A run whose process has gone
+    without recording an end (it crashed, ran out of memory, was ended from outside, or stopped
+    before it began) is reported as failed instead of running or starting for ever."""
+    run_dir = Path(job["run_dir"])
+    status = jobs.read_status(run_dir)
+    pid = job.get("pid")
+    if (status is None or status.get("state") not in jobs.ENDED) and pid and not _process_alive(int(pid)):
+        status = jobs.read_status(run_dir)  # it may have finished between the two reads
+        if status is None or status.get("state") not in jobs.ENDED:
+            return {
+                **(status or {}),
+                "state": "failed",
+                "error": "the analysis stopped before it finished (it crashed, ran out of memory, was "
+                "ended from outside, or refused to start); see process.log in the run folder",
+            }
+    return status or {"state": "starting", "progress": 0.0, "message": "Starting…"}
 
 
 def settings_from_state() -> dict[str, Any]:

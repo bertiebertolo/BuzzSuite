@@ -25,6 +25,8 @@ Examples
     python buzzsuite_cli.py phono --experiment <exp-dir>                 # dates auto-derived
     python buzzsuite_cli.py phono --experiment <exp-dir> --resting-only
     python buzzsuite_cli.py phono-flight <exp-dir> --workers 6           # flight-based phonotaxis
+    python buzzsuite_cli.py yolo inventory                               # live-detector training data
+    python buzzsuite_cli.py yolo all --workers 8                         # (see yolo_export/runner.py)
 
 Notes
 -----
@@ -537,6 +539,17 @@ def cmd_export(args):
     return 0
 
 
+# ----------------------------------------------------------------- yolo
+def cmd_yolo(args):
+    from yolo_export import runner
+    out = runner.run(args.action, out_dir=args.out, roots=args.root or None, rig=args.rig, aux=args.aux,
+                     experiments=args.experiment, limit=args.limit, workers=args.workers,
+                     frames_per_segment=args.frames_per_segment, n_clips=args.clips, force=args.force,
+                     single_class=args.single_class, log=_log)
+    _log("yolo %s -> %s" % (args.action, out))
+    return 0
+
+
 # ----------------------------------------------------------------- argparse
 def build_parser():
     p = argparse.ArgumentParser(
@@ -544,7 +557,7 @@ def build_parser():
         description="BuzzSuite headless batch runner (track / swarm / phono) — reuses the GUI callables.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Run with the conda env python. See the module docstring for examples.")
-    sub = p.add_subparsers(dest="command", metavar="{track,swarm,phono,phono-flight,export,convert}")
+    sub = p.add_subparsers(dest="command", metavar="{track,swarm,phono,phono-flight,export,convert,yolo}")
     sub.required = True
 
     # track
@@ -657,6 +670,34 @@ def build_parser():
                         "instead of skipping it (unattended equivalent of the GUI's confirmation dialog).")
     c.add_argument("--dry-run", action="store_true", help="Print the job list/counts without converting anything.")
     c.set_defaults(func=cmd_convert)
+
+    # yolo
+    # = yolo_export.runner.ACTIONS, not imported here so the other commands never load yolo_export
+    # (runner.run checks the action again)
+    yolo_actions = ("inventory", "annotate", "verify", "clock", "frames", "build", "clips", "qa", "docs", "all")
+    y = sub.add_parser("yolo", help="Training data for the live detector, built from BuzzWatch tracking.",
+                       description="Actions: inventory, annotate, verify, clock, frames, build, clips, qa, "
+                                   "docs, or all (everything, in order). See yolo_export/runner.py.")
+    y.add_argument("action", choices=yolo_actions, help="What to do.")
+    y.add_argument("--out", default=None, metavar="DIR",
+                   help="Output folder (default: BuzzWatch_LiveDetector next to the data root; "
+                        "never inside a Buzzwatch data tree).")
+    y.add_argument("--root", action="append", metavar="DIR",
+                   help="Buzzwatch data root to scan (repeatable; default: the configured root plus any "
+                        "mounted drive or volume with a Buzzwatch/Analysis tree).")
+    y.add_argument("--rig", default=None, help="Only the chosen experiments of this rig id (see inventory.csv).")
+    y.add_argument("--aux", action="store_true", help="The other rigs' experiments instead of the target rig's.")
+    y.add_argument("--experiment", "-e", nargs="+", metavar="ALIAS", default=None,
+                   help="Only these experiment aliases (from inventory/inventory.csv).")
+    y.add_argument("--limit", type=int, default=None, help="At most N segments per experiment (a pilot run).")
+    y.add_argument("--workers", "-w", type=int, default=None, help="Worker processes (default: cores-2, max 8).")
+    y.add_argument("--frames-per-segment", type=int, default=None,
+                   help="Frames sampled per segment (default: from the definitions, by role).")
+    y.add_argument("--clips", type=int, default=60, help="Clips per experiment for the clips action (default 60).")
+    y.add_argument("--force", action="store_true", help="Redo work already done.")
+    y.add_argument("--single-class", action="store_true",
+                   help="Also write single-class copies of the datasets (yolo/*_1class).")
+    y.set_defaults(func=cmd_yolo)
 
     return p
 

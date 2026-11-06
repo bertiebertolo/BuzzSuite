@@ -21,6 +21,14 @@ from yolo_export import common as C  # noqa: E402
 from yolo_export import tracks as TR  # noqa: E402
 
 
+def _defs():
+    """The definitions with the junk filter off: these checks are of the box rules on synthetic
+    labels, which lack the tracker meta the trained junk-filter model scores."""
+    defs = C.definitions()
+    defs["policy"]["junk_filter"] = False
+    return defs
+
+
 class _MT(object):
     def __init__(self, objects, n):
         self.objects = objects
@@ -45,7 +53,7 @@ def test_alignment():
         else:
             coords.append((400.0, 100.0)); state.append(0)
     mt = _MT(OrderedDict([(7, {"coordinates": coords, "state": state, "start": 0})]), 100)
-    defs = C.definitions()
+    defs = _defs()
     raw = TR.raw_points(mt)
     P = TR.aligned_points(raw, defs, 1000.0, np.array([500.0, 500.0]), None)
     vf = dict(zip(P["vf"].tolist(), P["state"].tolist()))
@@ -66,7 +74,7 @@ def test_alignment():
 
 def test_shared_blob():
     import pandas as pd
-    defs = C.definitions()
+    defs = _defs()
     # a, b: two touching mosquitoes in one blob (snapped to its centre); c: a second track 1 px from b
     L = pd.DataFrame({"frame_id": "f", "cls": 0, "state": 0, "motion": 0, "supported": True, "edge_suspect": False,
                       "contrast": [40, 30, 20], "comp_nlabels": 3, "comp_w": 30, "comp_h": 15,
@@ -80,7 +88,7 @@ def test_shared_blob():
 
 def test_flying_motion():
     import pandas as pd
-    defs = C.definitions()
+    defs = _defs()
     pol = defs["policy"]
     weak = (pol["flying_min_motion"] + pol["flying_strong_motion"]) // 2
     # r: resting mosquito; a: weak mover beside it (a leg); b: strong mover beside it (a take-off);
@@ -110,7 +118,7 @@ def test_flying_motion():
 
 def test_resting_satellites():
     import pandas as pd
-    defs = C.definitions()
+    defs = _defs()
     # cw 1000: radius 18 px, merge 0.6 x 16 px box = 9.6 px; too few clean labels -> single blob
     # area 0.6 x 16 x 16 = 153.6 px^2. a: mosquito, b: its leg blob; c, d: two real neighbours;
     # e, f: one blob tracked twice 8 px apart; g, h, i: a touching pair sharing a 2-mosquito blob plus
@@ -146,7 +154,7 @@ def test_resting_satellites():
 
 def test_tiles():
     import pandas as pd
-    defs = C.definitions()
+    defs = _defs()
     rng = np.random.default_rng(0)
     n = 40
     L = pd.DataFrame({"frame_id": "f", "x": rng.uniform(300, 1450, n), "y": rng.uniform(10, 1070, n),
