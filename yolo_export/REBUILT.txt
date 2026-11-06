@@ -1,0 +1,5 @@
+This yolo_export was rebuilt on 2026-11-06 from the Claude Code transcripts (every Write/Edit and the six shell
+edits, replayed in time order by REBUILT_FROM_TRANSCRIPTS_replay.py), because D:\BuzzSuite is gone for good.
+Check: label_boxes() on the existing meta reproduces build_report.json exactly for all three target experiments
+(labels, kept, merged, static/orphan flying, resting satellites). This is now the only copy (generator 1.2.0).
+It sits in the G:\BuzzSuite-github clone (GitHub main fff0dab, 2026-11-05) and is not committed yet.
