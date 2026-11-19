@@ -69,3 +69,30 @@ hold the work itself).
   synthetic experiment (done, and recovery after a hard kill); yolo selftest passes in buzzwatch_env.
 - Still open (known, see 1.3.0 entry): numpy-2-era pickles (e.g. piezo LD4_23-25) crash py3.8 / numpy 1.24
   with an access violation in plain pickle.load too, which can hang pool_run on a dead worker.
+
+## 2026-11-19 — BuzzSwarm swarm-zone radius; BuzzPhono wall control zones; feeder-zone checks
+
+- `517a3b7` BuzzSwarm: a "Swarm zone…" button (`swarm_zone_dialog.py`) sets the swarm-zone radius on a camera frame
+  of the cage (slider, number box or drag; shows the share of cage area). Saved per experiment in
+  `plots/buzzswarm/swarm_zone.json` (`clock_analysis.save_swarm_radius` / `load_swarm_radius`); `run()` uses the
+  experiment dict's `swarm_radius_px`, else the saved radius, else 100 px. Day caches do not depend on it. The
+  Swarming tab's controls and plots are split by a draggable divider ("Continuous" no longer cut off).
+  Headless check, 15/15: save/load and bad values rejected; `run()` order dict > saved > default; on
+  Penzance_Aedes_aegypti_M_20260704_20260707 (2026-07-05 day cache) radius 100 reproduces the saved windows.csv
+  `swarm_mean` exactly and 200 gives larger values; dialog drag/save/reopen; tab builds with stub managers.
+- `a2c9603` BuzzPhono: Calibrate starts with the speaker zone; the control zones are copies of it on the other three
+  walls (`calibration.wall_controls`, cage corners from `buzzwatch_track_settings.yml` via `cage_from_settings`),
+  tests in `tests/buzzphono/unit/test_wall_controls.py`. buzzphono_env's editable install points at
+  `G:\BuzzSuite-github` again (it was on the `swarm-plots` worktree).
+- Branch `feeder-tracking-check` (not merged): `tools/feeder_check/`, read-only diagnostics for zones that look empty
+  in the BuzzSwarm flight heatmap (before/after-filter heatmap, resting vs flying heatmap with hourly zone density,
+  labelled tracking clip, independent dark-spot check on raw video). Findings on the Penzance Ae. aegypti M
+  experiment (Jul 5-7): the heatmap's linear colour scale hides everything under ~10% of the centre; over the dark
+  wall panels a flyer darkens the image by ~10-30 grey levels vs ~70 at the centre; the filters remove most wall
+  detections everywhere (walking/landing), not only at the feeders. Untracked spots in the feeder zones were mostly
+  mosquitoes sitting there and recorded by the resting tracker; missed flight ~3-5%. Resting density on the feeder
+  panels is ~1.4-1.5x the other walls with lights on, lower at night. Track coordinate k = video frame start+k-2
+  (as in VideoManager.overlay_tracking; checked on video).
+- Open: that experiment's `buzzwatch_track_settings.yml` has an empty `cage_border_points` (its geometry.json is
+  older), so a BuzzSwarm rerun or the swarm-zone dialog there stops with "no cage border drawn" until the border is
+  redrawn. Its experiment JSON still points at the old data drive's Light_Test folder.
