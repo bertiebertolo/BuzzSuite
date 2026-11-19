@@ -98,8 +98,9 @@ def start(args, log_path, cwd=None):
     cmd = buzzphono_command() + list(args)
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     with open(log_path, "ab") as fh:  # the child keeps its own handle
-        return subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=clean_env(), cwd=cwd,
-                                creationflags=flags)
+        # no stdin: a child that asks a question on the terminal must fail, not wait unseen forever
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                                env=clean_env(), cwd=cwd, creationflags=flags)
 
 
 # BuzzPhono's run-folder protocol (buzzphono/jobs.py), mirrored here because BuzzSuite never imports it.

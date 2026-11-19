@@ -14,6 +14,25 @@ import buzzphono_bridge as bb
 from tooltip import add_tooltip
 
 DEFAULT_ANALYSES = "resting_fraction,attraction_index,psth,zt_profile,reliability"
+APP_URL = "http://127.0.0.1:8501"   # the app serves on 127.0.0.1 only (not ::1, which "localhost" may mean)
+
+
+def _app_answers():
+    """True if a BuzzPhono/Streamlit app already answers on APP_URL."""
+    try:
+        from urllib.request import urlopen
+        with urlopen(APP_URL + "/_stcore/health", timeout=0.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _log_tail(path, lines=15):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return "".join(fh.readlines()[-lines:]).strip()
+    except OSError:
+        return ""
 
 
 class BuzzphonoLauncherTab(object):
@@ -81,15 +100,43 @@ class BuzzphonoLauncherTab(object):
             self.exp_var.set(d)
 
     def open_app(self):
-        if self.app_proc is not None and self.app_proc.poll() is None:
-            webbrowser.open("http://localhost:8501")
+        if _app_answers() or (self.app_proc is not None and self.app_proc.poll() is None):
+            # already running (from this tab, or left over from an earlier session)
+            webbrowser.open(APP_URL)
             return
         try:
-            log = os.path.join(os.path.expanduser("~"), ".buzzphono_app.log")
-            self.app_proc = bb.start(["app"], log)
-            self.log("BuzzPhono app starting (log: %s)" % log)
-        except bb.BuzzPhonoNotFound as exc:
+            self.app_log = os.path.join(os.path.expanduser("~"), ".buzzphono_app.log")
+            with open(self.app_log, "a") as fh:
+                fh.write("\n---- %s: starting the BuzzPhono app\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+            self.app_proc = bb.start(["app"], self.app_log)
+            self.log("BuzzPhono app starting (log: %s)" % self.app_log)
+        except (bb.BuzzPhonoNotFound, OSError) as exc:
             messagebox.showerror("BuzzPhono not found", str(exc))
+            return
+        self._app_started = time.time()
+        self.root.after(1000, self._watch_app)
+
+    def _watch_app(self):
+        """Follow the app until it answers; if it stops first, say why instead of leaving a dead page."""
+        proc = self.app_proc
+        if proc is None:
+            return
+        if proc.poll() is not None:
+            self.app_proc = None
+            tail = _log_tail(self.app_log)
+            self.log("BuzzPhono app stopped (exit code %s)" % proc.returncode)
+            messagebox.showerror(
+                "BuzzPhono app",
+                "The BuzzPhono app stopped before its page could open.\n\nLast lines of %s:\n\n%s"
+                % (self.app_log, tail or "(empty)"))
+            return
+        if _app_answers():
+            self.log("BuzzPhono app ready at %s" % APP_URL)
+            return   # Streamlit opens the browser itself
+        if time.time() - self._app_started > 120:
+            self.log("BuzzPhono app has not answered after 2 minutes; see %s" % self.app_log)
+            return
+        self.root.after(1000, self._watch_app)
 
     def analyse(self):
         exp = self.exp_var.get().strip()

@@ -544,6 +544,10 @@ def app_cmd(
         "false",
         "--server.headless",
         "true" if headless else "false",
+        # on a computer that never ran Streamlit it would otherwise wait for an email on the terminal
+        # before serving anything, and the page would never open
+        "--server.showEmailPrompt",
+        "false",
     ]
     raise SystemExit(subprocess.call(cmd))
 
