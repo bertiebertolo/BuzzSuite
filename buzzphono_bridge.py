@@ -79,6 +79,9 @@ def clean_env():
         env.pop(k, None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["MPLBACKEND"] = "Agg"
+    # `python -m buzzphono` would otherwise look in the current folder first, where an old
+    # BuzzSuite's legacy buzzphono/ folder hides the real package (Python 3.11+)
+    env["PYTHONSAFEPATH"] = "1"
     return env
 
 
