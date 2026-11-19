@@ -125,8 +125,12 @@ class BuzzswarmTabManager:
     def init_buzzswarm_tab(self, tab: ttk.Frame):
         self.tab = tab
         saved = self._load_view()
-        controls_outer, controls = make_scrollable_column(tab)
-        controls_outer.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        # Left controls | right plots, split by a draggable sash so the controls column can be widened.
+        self._panes = tk.PanedWindow(tab, orient=tk.HORIZONTAL, sashwidth=6, sashrelief=tk.RAISED,
+                                     bd=0, opaqueresize=True)
+        self._panes.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        controls_outer, controls = make_scrollable_column(self._panes)
+        self._panes.add(controls_outer, minsize=220, width=340, padx=6, pady=10, stretch="never")
 
         tk.Label(controls, text="BuzzSwarm (Aggregation)",
                  font=("TkDefaultFont", 12, "bold")).pack(side=tk.TOP, anchor="w")
@@ -165,6 +169,11 @@ class BuzzswarmTabManager:
         tk.Button(group_row, text="Set", command=self._on_set_group_clicked).pack(side=tk.LEFT)
         add_tooltip(group_entry, "Colour and legend label (e.g. 'Male' / 'Female'). Experiments "
                     "with the same Group are averaged together.")
+        zone_btn = tk.Button(list_frame, text="Swarm zone…", command=self._on_swarm_zone_clicked)
+        zone_btn.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 2))
+        add_tooltip(zone_btn, "Set the swarm-zone radius (px) for the selected experiment on a "
+                    "picture of its cage. 100 px suits the old camera; a higher-resolution camera "
+                    "needs a larger radius. Saved per experiment.")
         tk.Button(list_frame, text="Remove selected", command=self._on_remove_clicked).pack(
             side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
 
@@ -212,8 +221,8 @@ class BuzzswarmTabManager:
         # ---- Plots ----
         plot_frame = tk.LabelFrame(controls, text="Plots")
         plot_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
-        mode_row = tk.Frame(plot_frame); mode_row.pack(fill=tk.X, padx=4, pady=(4, 2))
-        tk.Label(mode_row, text="Through the day:").pack(side=tk.LEFT)
+        tk.Label(plot_frame, text="Through the day:").pack(side=tk.TOP, anchor="w", padx=4, pady=(4, 0))
+        mode_row = tk.Frame(plot_frame); mode_row.pack(fill=tk.X, padx=4, pady=(0, 2))
         self.mode_var = tk.StringVar(value=saved.get('mode') if saved.get('mode') in dict(_MODES) else 'overlay')
         for value, text in _MODES:
             tk.Radiobutton(mode_row, text=text, variable=self.mode_var, value=value).pack(side=tk.LEFT)
@@ -247,8 +256,8 @@ class BuzzswarmTabManager:
                  wraplength=300, justify="left").pack(side=tk.TOP, anchor="w", pady=(8, 0))
 
         # ---- Output browser ----
-        right = tk.Frame(tab)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        right = tk.Frame(self._panes)
+        self._panes.add(right, minsize=300, padx=6, pady=10, stretch="always")
         nav = tk.Frame(right); nav.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
         tk.Label(nav, text="Plot:").pack(side=tk.LEFT)
         self.plot_combo = ttk.Combobox(nav, state="readonly", width=60)
@@ -262,6 +271,24 @@ class BuzzswarmTabManager:
         holder = tk.Frame(right); holder.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.preview = ImagePreview(holder, placeholder="Run the analysis to see the plots here.",
                                     log=lambda msg: self.log(f"BuzzSwarm: {msg}"))
+        self._controls_outer = controls_outer
+        self._controls = controls
+        self._user_sized = False
+        self._panes.bind("<ButtonRelease-1>", lambda e: setattr(self, "_user_sized", True), add="+")
+        controls.bind("<Configure>", self._fit_controls_width, add="+")
+
+    def _fit_controls_width(self, _event=None):
+        """Widen the controls pane so its widest row fits (scrollbar included), until the user
+        drags the divider themselves; after that their width is kept."""
+        if self._user_sized:
+            return
+        try:
+            need = self._controls.winfo_reqwidth() + 24
+            have = int(self._panes.panecget(self._controls_outer, "width") or 0)
+        except (tk.TclError, ValueError):
+            return
+        if need > have:
+            self._panes.paneconfigure(self._controls_outer, width=need)
 
     def _build_date_table(self, parent):
         """Scrollable per-date rows (ported from activity_plot_manager.py's date table)."""
@@ -392,7 +419,8 @@ class BuzzswarmTabManager:
                  'coverage': coverage, 'included': {d: d in days for d in coverage},
                  'night_start': int(schedule.get('night_start_hour', ld_dd.DEFAULT_NIGHT[0])),
                  'night_end': int(schedule.get('night_end_hour', ld_dd.DEFAULT_NIGHT[1])),
-                 'schedule': schedule}
+                 'schedule': schedule,
+                 'swarm_radius': ca.load_swarm_radius(folder) or ca.SWARM_RADIUS_PX}
         self._sync_date_widgets_to_entry()
         self.entries.append(entry)
         self._refresh_listbox()
@@ -415,6 +443,30 @@ class BuzzswarmTabManager:
         self._refresh_listbox()
         self.exp_listbox.selection_set(idx)
 
+    def _on_swarm_zone_clicked(self):
+        idx = self._selected_entry_idx()
+        if idx is None:
+            self.ui_manager.show_error("BuzzSwarm", "Select an experiment in the list first.")
+            return
+        entry = self.entries[idx]
+
+        def saved(radius):
+            entry['swarm_radius'] = float(radius)
+            self._refresh_listbox()
+            self.exp_listbox.selection_set(idx)
+            self._set_status(f"Swarm zone for {entry['alias']} set to {int(radius)} px. Click Run "
+                             "analysis to apply it (days already analysed rerun in seconds).")
+            self.log(f"BuzzSwarm: swarm radius for {entry['alias']} saved as {int(radius)} px.")
+
+        from swarm_zone_dialog import SwarmZoneDialog
+        try:
+            SwarmZoneDialog(self.root, entry['folder'], entry['alias'], entry.get('swarm_radius'),
+                            on_save=saved, log=self.log)
+        except (OSError, ValueError) as exc:
+            self.ui_manager.show_error("BuzzSwarm — swarm zone",
+                                       f"Can't show the cage for {entry['alias']}:\n{exc}\n\n"
+                                       "Draw the cage border in the Setup tab first.")
+
     def _on_remove_clicked(self):
         idx = self._selected_entry_idx()
         if idx is None:
@@ -429,7 +481,9 @@ class BuzzswarmTabManager:
         self.exp_listbox.delete(0, tk.END)
         for e in self.entries:
             n = sum(1 for v in e['included'].values() if v)
-            self.exp_listbox.insert(tk.END, f"{e['alias']}  [{e['group']}]  ({n} days)")
+            r = e.get('swarm_radius')
+            zone = f"  r={int(r)} px" if r else ""
+            self.exp_listbox.insert(tk.END, f"{e['alias']}  [{e['group']}]  ({n} days){zone}")
 
     def _selected_entry_idx(self):
         sel = self.exp_listbox.curselection()
@@ -593,7 +647,8 @@ class BuzzswarmTabManager:
             self.log("BuzzSwarm: the experiments have different light hours; plots shade the "
                      "first experiment's night.")
         experiments = [{'folder': e['folder'], 'alias': e['alias'], 'group': e['group'],
-                        'days': [d for d in e['coverage'] if e['included'].get(d)]} for e in units]
+                        'days': [d for d in e['coverage'] if e['included'].get(d)],
+                        'swarm_radius_px': e.get('swarm_radius')} for e in units]
         return {'experiments': experiments, 'entries': units, 'view': view,
                 'night': (units[0]['night_start'], units[0]['night_end']),
                 'fig_dir': self._figures_dir(units)}

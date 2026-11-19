@@ -263,6 +263,52 @@ def _area_shares(polygon, centroid, swarm_radius, n=400_000, seed=0):
             'ring_edges': rings, 'rings': np.histogram(r, rings)[0] / float(n)}
 
 
+SWARM_ZONE_FILE = 'swarm_zone.json'    # per experiment, in plots/buzzswarm/: {"swarm_radius_px": N}
+
+
+def swarm_zone_path(experiment_dir):
+    return os.path.join(experiment_output_dir(experiment_dir), SWARM_ZONE_FILE)
+
+
+def load_swarm_radius(experiment_dir):
+    """The swarm-zone radius (px) saved for this experiment, or None if none was saved. Different
+    cameras need different radii (100 px suits the old 720p camera)."""
+    try:
+        with open(swarm_zone_path(experiment_dir), 'r') as f:
+            radius = float(json.load(f).get('swarm_radius_px'))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    return radius if np.isfinite(radius) and radius > 0 else None
+
+
+def save_swarm_radius(experiment_dir, radius_px):
+    """Save the experiment's swarm-zone radius (px). Used by the next Run analysis."""
+    radius = float(radius_px)
+    if not (np.isfinite(radius) and radius > 0):
+        raise ValueError(f'swarm radius must be a positive number of pixels, not {radius_px!r}')
+    path = swarm_zone_path(experiment_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump({'swarm_radius_px': radius, 'saved': datetime.now().isoformat(timespec='seconds')},
+                  f, indent=2)
+    return path
+
+
+def cage_reference_image(experiment_dir):
+    """A camera frame of this experiment to draw the swarm zone on: the middle per-segment frame in
+    individual_images/, else background_with_borders.png / background.png. None if there is none."""
+    folder = os.path.join(experiment_dir, 'individual_images')
+    if os.path.isdir(folder):
+        pngs = sorted(f for f in os.listdir(folder) if f.lower().endswith('.png') and not f.startswith('.'))
+        if pngs:
+            return os.path.join(folder, pngs[len(pngs) // 2])
+    for name in ('background_with_borders.png', 'background.png'):
+        path = os.path.join(experiment_dir, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def experiment_geometry(experiment_dir, swarm_radius_px=SWARM_RADIUS_PX):
     centroid, polygon = cage_geometry(experiment_dir)
     half = np.ceil(np.abs(polygon - np.asarray(centroid, dtype=float)).max() / HEAT_CELL_PX) * HEAT_CELL_PX
@@ -761,8 +807,9 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
     Per experiment, writes bins_{N}min.csv, windows.csv, swarm_size.csv, swarm_minutes.csv,
     profile.csv, heatmap.csv and geometry.json to {out_root}/{alias}/ if out_root is given, else
     to the experiment's own plots/buzzswarm/ (load_outputs reads them back). Day
-    caches go to {cache_root}/{alias}/ or plots/buzzswarm/day_cache/. swarm_radius_px sets the
-    swarm zone (default SWARM_RADIUS_PX; metrics only, caches are unaffected). workers=None picks a
+    caches go to {cache_root}/{alias}/ or plots/buzzswarm/day_cache/. The swarm zone's radius is,
+    per experiment, its dict's 'swarm_radius_px', else the radius saved with save_swarm_radius,
+    else swarm_radius_px (metrics only, caches are unaffected). workers=None picks a
     memory-safe count per day. progress(fraction 0-1, message) is called from the calling
     thread; a set `cancel` Event raises Cancelled.
     Returns a dict of DataFrames for all experiments together: bins, windows, swarm_size, minutes,
@@ -780,7 +827,8 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
         alias = exp.get('alias') or default_alias(folder)
         group = exp.get('group') or alias
         tags = exp.get('tags') or {}
-        geo = experiment_geometry(folder, swarm_radius_px)
+        radius = exp.get('swarm_radius_px') or load_swarm_radius(folder) or swarm_radius_px
+        geo = experiment_geometry(folder, radius)
         segments = list_segments(folder)
         cache_dir = (os.path.join(cache_root, alias) if cache_root
                      else os.path.join(experiment_output_dir(folder), 'day_cache'))
