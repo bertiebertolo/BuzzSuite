@@ -112,3 +112,31 @@ def test_pages_without_experiments_explain_what_to_do() -> None:
     for name in ("pages/2_Calibrate.py", "pages/3_Validate.py", "pages/4_Analyse.py"):
         at = AppTest.from_file(str(APP / name), default_timeout=60).run()
         assert not at.exception and any("Load an experiment first" in i.value for i in at.info)
+
+
+def test_calibrate_starts_with_a_speaker_zone_and_places_the_controls(tmp_path) -> None:
+    simulate_experiment(DESIGN, seed=11, out_dir=tmp_path / "exp")
+    for name in ("custom_zones.json", "buzzphono_calibration.json"):
+        (tmp_path / "exp" / name).unlink(missing_ok=True)
+    at = _page("pages/2_Calibrate.py", tmp_path)
+    assert not at.exception
+    assert at.selectbox[1].value == "speaker"  # [0] is the experiment
+    key = f"cal_{tmp_path / 'exp'}"
+    cal = at.session_state[key]
+    assert len(cal["cage"]) == 4  # taken from buzzwatch_track_settings.yml
+    assert [z["role"] for z in cal["zones"]] == ["speaker"]
+    x0, y0 = cal["cage"][0]
+    y3 = cal["cage"][3][1]
+    mid = (y0 + y3) / 2
+    cal["zones"][0]["polygon"] = [(x0, mid - 30), (x0 + 30, mid - 30), (x0 + 30, mid + 30), (x0, mid + 30)]
+    at.session_state[key] = cal
+    at.run()
+    assert not at.exception
+    zones = at.session_state[key]["zones"]
+    assert sorted(z["name"] for z in zones if z["role"] == "control") == [
+        "control_bottom",
+        "control_right",
+        "control_top",
+    ]
+    next(b for b in at.button if b.label == "Save calibration").click().run()
+    assert not at.exception and any("Saved" in s.value for s in at.success)

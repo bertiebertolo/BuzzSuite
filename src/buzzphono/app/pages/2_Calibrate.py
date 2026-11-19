@@ -17,8 +17,10 @@ from buzzphono.calibration import (
     Calibration,
     PhysicalSize,
     Zone,
+    cage_from_settings,
     reference_images,
     save_calibration,
+    wall_controls,
 )
 from buzzphono.config import plain_english
 from buzzphono.errors import BuzzPhonoError
@@ -51,9 +53,43 @@ if key not in st.session_state:
         st.session_state[key] = resolve_calibration(folder).model_dump()
         st.caption(f"Loaded the existing zones ({CALIBRATION_FILE} or custom_zones.json).")
     except BuzzPhonoError as exc:
-        st.warning(f"No calibration yet: {exc}")
-        st.session_state[key] = {"frame_width_px": w, "frame_height_px": h, "cage": [], "zones": []}
+        st.info(f"No zones yet ({exc}). Draw the speaker zone below; the control zones follow from it.")
+        cage = cage_from_settings(folder) or []
+        st.session_state[key] = {"frame_width_px": w, "frame_height_px": h, "cage": cage, "zones": []}
 cal = st.session_state[key]
+if not any(z.get("role") == "speaker" for z in cal.get("zones", [])):
+    name = "speaker" if all(z["name"] != "speaker" for z in cal.get("zones", [])) else "speaker_zone"
+    cal.setdefault("zones", []).insert(0, {"name": name, "role": "speaker", "polygon": []})
+auto_key = f"auto_controls_{folder}"
+if auto_key not in st.session_state:
+    # controls follow the speaker unless the experiment already has its own (e.g. hand-drawn ones)
+    st.session_state[auto_key] = not any(z.get("role") == "control" for z in cal["zones"])
+
+
+def rebuild_controls() -> bool:
+    """Replace the control zones with copies of the speaker zone on the other walls. True if changed."""
+    spk = next(z for z in cal["zones"] if z.get("role") == "speaker")
+    if len(cal.get("cage", [])) != 4 or len(spk["polygon"]) < 3:
+        return False
+    try:
+        made = [z.model_dump() for z in wall_controls(cal["cage"], spk["polygon"], (w, h))]
+    except (BuzzPhonoError, ValueError):
+        return False
+    taken = {z["name"] for z in cal["zones"] if z.get("role") != "control"}
+    for z in made:
+        while z["name"] in taken:
+            z["name"] += "_"
+    old = [z for z in cal["zones"] if z.get("role") == "control"]
+    if [(z["name"], [tuple(p) for p in z["polygon"]]) for z in old] == [
+        (z["name"], [tuple(p) for p in z["polygon"]]) for z in made
+    ]:
+        return False
+    cal["zones"] = [z for z in cal["zones"] if z.get("role") != "control"] + made
+    return True
+
+
+if st.session_state[auto_key]:
+    rebuild_controls()
 if (cal.get("frame_width_px"), cal.get("frame_height_px")) != (w, h):
     st.error(
         f"The video frames are {w}×{h} px but this calibration is for {cal.get('frame_width_px')}×{cal.get('frame_height_px')} px. "
@@ -87,8 +123,9 @@ st.plotly_chart(fig, use_container_width=True)
 # ---- edit one zone
 st.subheader("Edit a zone")
 names = ["cage"] + [z["name"] for z in cal.get("zones", [])]
+speaker_name = next(z["name"] for z in cal["zones"] if z.get("role") == "speaker")
 c1, c2, c3 = st.columns([2, 2, 1])
-target = c1.selectbox("Zone", [*names, "(new control zone)"])
+target = c1.selectbox("Zone", [*names, "(new control zone)"], index=names.index(speaker_name))
 if target == "(new control zone)":
     new_name = c2.text_input("Name of the new zone", value=f"control_{len(names)}")
     if c3.button("Create") and new_name and new_name not in names:
@@ -96,6 +133,7 @@ if target == "(new control zone)":
         st.rerun()
     st.stop()
 current = cal["cage"] if target == "cage" else next(z for z in cal["zones"] if z["name"] == target)["polygon"]
+before = [tuple(p) for p in current]
 if target != "cage":
     zone = next(z for z in cal["zones"] if z["name"] == target)
     zone["role"] = c2.selectbox(
@@ -105,7 +143,9 @@ if target != "cage":
         help="Exactly one zone is the speaker. Controls are compared with it; 'other' zones (e.g. feeders) are only shown.",
     )
 st.caption(
-    "Click the picture to add a corner (in order around the zone), or type the corners in the table. The cage needs 4 corners: top-left, top-right, bottom-right, bottom-left."
+    "Start with the speaker zone: click the picture to add its corners in order around it, or type them in the "
+    "table. The control zones are then placed on the other walls for you. The cage needs 4 corners: "
+    "top-left, top-right, bottom-right, bottom-left."
 )
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
@@ -117,6 +157,8 @@ try:
     last = st.session_state.get(f"last_click_{target}")
     if click and click != last:
         st.session_state[f"last_click_{target}"] = click
+        if target != "cage" and next(z for z in cal["zones"] if z["name"] == target).get("role") == "control":
+            st.session_state[auto_key] = False  # hand-drawn control: keep it
         current.append((round(click["x"] * scale, 1), round(click["y"] * scale, 1)))
         st.rerun()
 except ImportError:
@@ -128,13 +170,31 @@ table = st.data_editor(
 current[:] = [
     (float(r.x_px), float(r.y_px)) for r in table.itertuples() if pd.notna(r.x_px) and pd.notna(r.y_px)
 ]
-b1, b2 = st.columns(2)
+target_role = None if target == "cage" else next(z for z in cal["zones"] if z["name"] == target).get("role")
+if target_role == "control" and [tuple(p) for p in current] != before:
+    st.session_state[auto_key] = False  # a hand-edited control is kept; the speaker no longer overwrites it
+if st.session_state[auto_key] and rebuild_controls():
+    st.rerun()
+b1, b2, b3 = st.columns(3)
 if b1.button("Clear this zone"):
     current.clear()
     st.rerun()
-if target != "cage" and b2.button("Delete this zone"):
+if target_role != "speaker" and target != "cage" and b2.button("Delete this zone"):
     cal["zones"] = [z for z in cal["zones"] if z["name"] != target]
     st.rerun()
+if b3.button(
+    "Rebuild controls from the speaker",
+    help="Replace the control zones with copies of the speaker zone on the other three walls, each turned "
+    "to sit against its wall. They then follow the speaker zone again while you edit it.",
+):
+    st.session_state[auto_key] = True
+    rebuild_controls()
+    st.rerun()
+if st.session_state[auto_key]:
+    st.caption(
+        "Control zones follow the speaker zone: the same shape and size on each of the other walls. "
+        "Editing a control by hand stops this for that experiment."
+    )
 
 # ---- size in mm and save
 st.subheader("Cage size (optional)")

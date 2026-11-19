@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from buzzphono import __version__
 from buzzphono.config import plain_english
 from buzzphono.errors import CalibrationError, ConfigError
-from buzzphono.geometry import as_polygon, contains
+from buzzphono.geometry import as_polygon, centroid, contains
 from buzzphono.io.cache import atomic_write_text
 
 CALIBRATION_FILE = "buzzphono_calibration.json"
@@ -195,6 +195,75 @@ def image_size(path: Path) -> tuple[int, int]:
 
     with Image.open(path) as im:
         return int(im.size[0]), int(im.size[1])
+
+
+def cage_from_settings(experiment_dir: Path) -> list[Point] | None:
+    """The four cage corners from BuzzWatch's ``buzzwatch_track_settings.yml``, or None."""
+    import yaml
+
+    try:
+        text = (experiment_dir / "buzzwatch_track_settings.yml").read_text(encoding="utf-8")
+        pts = [(float(x), float(y)) for x, y in yaml.safe_load(text)["cage_border_points"]]
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError):
+        return None
+    return pts if len(pts) == 4 else None
+
+
+def _wall_side(mid: np.ndarray, centre: np.ndarray) -> str:
+    dx, dy = mid - centre
+    if abs(dx) >= abs(dy):
+        return "right" if dx > 0 else "left"
+    return "bottom" if dy > 0 else "top"  # image y grows downwards
+
+
+def wall_controls(
+    cage: list[Point], speaker: list[Point], frame: tuple[int, int] | None = None
+) -> list[Zone]:
+    """Control zones made from the speaker zone: one copy on each of the other three cage walls.
+
+    The speaker belongs to the cage wall nearest its centroid. Each copy keeps the speaker zone's
+    shape and size, its depth into the cage and its offset from the wall's midpoint, and is turned
+    to sit against its own wall (so on a non-square cage the copies still touch their walls). With
+    ``frame`` (width, height), vertices are clipped to the picture. Names: control_left / _right /
+    _top / _bottom.
+    """
+    c = np.asarray(cage, dtype=np.float64)
+    s = as_polygon(speaker)
+    if c.shape != (4, 2):
+        raise CalibrationError("The cage needs its 4 corners before control zones can be placed.")
+    centre = c.mean(axis=0)
+
+    def wall(i: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        a, b = c[i], c[(i + 1) % 4]
+        along = b - a
+        length = float(np.hypot(*along))
+        if length < 1e-9:
+            raise CalibrationError("Two cage corners are at the same place; redraw the cage.")
+        u = along / length
+        n = np.array([-u[1], u[0]])
+        mid = (a + b) / 2.0
+        if np.dot(centre - mid, n) < 0:
+            n = -n  # inward normal
+        return mid, u, n
+
+    walls = [wall(i) for i in range(4)]
+    sc = centroid(s)
+    seg_a, seg_b = c, np.roll(c, -1, axis=0)
+    ab = seg_b - seg_a
+    t = np.clip(((sc - seg_a) * ab).sum(axis=1) / np.maximum((ab * ab).sum(axis=1), 1e-12), 0.0, 1.0)
+    k = int(np.argmin(np.hypot(*(seg_a + t[:, None] * ab - sc).T)))
+    mid_k, u_k, n_k = walls[k]
+    local = np.column_stack([(s - mid_k) @ u_k, (s - mid_k) @ n_k])  # (along wall, into the cage)
+    zones = []
+    for j, (mid, u, n) in enumerate(walls):
+        if j == k:
+            continue
+        pts = mid + local[:, :1] * u + local[:, 1:] * n
+        if frame is not None:
+            pts = np.column_stack([np.clip(pts[:, 0], 0, frame[0]), np.clip(pts[:, 1], 0, frame[1])])
+        polygon = [(round(float(x), 1), round(float(y), 1)) for x, y in pts]
+        zones.append(Zone(name=f"control_{_wall_side(mid, centre)}", role="control", polygon=polygon))
+    return zones
 
 
 def reference_images(experiment_dir: Path) -> list[Path]:
