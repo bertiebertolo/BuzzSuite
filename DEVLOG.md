@@ -70,6 +70,77 @@ hold the work itself).
 - Still open (known, see 1.3.0 entry): numpy-2-era pickles (e.g. piezo LD4_23-25) crash py3.8 / numpy 1.24
   with an access violation in plain pickle.load too, which can hang pool_run on a dead worker.
 
+## 2026-11-08 — v13 training failed; two fixes (missed review fixes, numpy 2.4)
+
+- run_v13.cmd: aux export, the 1.3.0 build (201 min) and the copy to C:\yolo_data_v13 finished; training failed at
+  the end of epoch 1 (`np.trapz` is gone in numpy 2.4.6, installed in yolo_env on 10-29 20:43, after v12; Ultralytics
+  8.3.40 still calls it). Epoch 1 also took 72 min, not ~5: data.yaml carried `path: G:/...`, so it trained off USB.
+- Cause of the path: the transcript replay had missed `apply_review_fixes.py` (10-22 12:48, 15 edits written to a
+  scratchpad script and run from the shell): relocatable data.yaml, pool terminate on error, test_days
+  normalisation and one-split-per-stem check, cage-polygon requirement, raw sort-order guard, numpy-bool json,
+  clock schedule warning. Replayed it (0 later edits fail), patched it into G:\BuzzSuite-github\yolo_export
+  (one runner hunk skipped: an equivalent job_geometry guard was already there). Label rules re-checked with the
+  junk filter off: identical to the 1.2.0 build_report. Copy before the patch: G:\BuzzWatch_LiveDetector\code\.
+  Fixed the three data.yaml files already written. Still open: pool_run hangs when a worker dies hard.
+- training/train_v13.py + train_v13.cmd: train (v12's args) via the Python API with np.trapz aliased, test-val of v13
+  and of v12 on the 1.3.0 labels, gold_eval_model.py, eval_centres. The environment itself is unchanged.
+
+## 2026-11-08 — v13 results (1.3.0 junk filter + 5 Penzance 720p aux experiments)
+
+Trained 60 epochs (08:20-16:18, ~8 min/epoch from C:). Gold set (raw test frames, conf 0.25), v12 -> v13:
+- resting boxes per frame: Aedes 39.1 -> 29.6, Tbambusa 40.4 -> 20.5 (gold-set estimate of real resting: ~28 / ~21).
+- junk boxed 0.62 -> 0.21 / 0.75 -> 0.13; shadows 0.83 -> 0.26 / 0.82 -> 0.36; parts 0.40 -> 0.20 / 0.52 -> 0.07.
+- real v12 boxes still boxed 0.97 -> 0.86 / 0.97 -> 0.70; real mosquitoes v12 missed now boxed 0.14 -> 0.42 / 0.03 -> 0.23.
+Test split on the 1.3.0 labels (eval_centres, 8 px): resting F1 0.659 -> 0.769, flying 0.832 -> 0.836, resting count
+bias +8.9 -> +1.8 per frame, MAE 9.4 -> 3.6, r 0.33 -> 0.73; night flying F1 0.571 -> 0.583.
+Demo (demo/stack_v13_demo.mp4) resting per frame v12 -> v13: 22.6 -> 18.0, 25.3 -> 13.3, 36.2 -> 30.1, 37.8 -> 18.6.
+Open: Tbambusa real-box retention 0.70 (the filter's 15% real loss plus grey-out); HEF compile + chip check for v13.
+
+## 2026-11-10 — gold round 2; v14 started (resting relabelled by v13 + tracker agreement)
+
+Round 2 (`training/gold_set2`, 500 crops judged 11-10): v13-only boxes 91% / 84% real (Aedes / Tbambusa) vs
+v12-only 32% / 36%. Junk filter on 720p aux cages: kept 80% real, dropped 26% real (generalises). Near its threshold
+labels are 40-55% real. Retraining the filter on rounds 1+2 (1,131 labels): grouped-CV AUC 0.821 -> 0.829, removes
+60 -> 63% of false at 85% real kept: tracker meta is near its ceiling; the retrained model is NOT switched on.
+v14 (`training/pseudo_v14.py`, `run_v14.cmd`): train/val tiles re-cut from raw frames; resting = v13 >= 0.40, or
+v13 0.25-0.40 agreeing (8 px) with a 1.3.0 tracker label; one-source spots greyed; flying = tracker. A v13-only
+first version taught real 720p mosquitoes v13 missed as background (seen on a tile check) and was replaced.
+Test split = v13's (1.3.0). Scoring: gold rounds 1 and 2 (gold_eval_model.py, gold2_eval_model.py) + eval_centres.
+Launch note: a window started with Start-Process from a tool call got the tool's Ctrl-C when the call timed out;
+launch long jobs with Win32_Process Create (detached).
+- 12:08: held out a whole experiment for an unseen test: Penzance_Aedes_aegypti_F_250hz_20260711_20260714 (females,
+  repulsion, 720p; 5,863 tiles) removed from v14's training list (`v14_tiles.csv`; full list `v14_tiles_all.csv`); its
+  3,907 tiles already relabelled were moved to C:\yolo_data_v14_heldout_moved. `holdout_eval.py` scores models on its
+  1,350 complete frames vs the 1.3.0 tracker labels (5.3 px at 720p). Baseline v12: resting 44.6 / frame vs 16.4
+  reference (F1 0.374), flying F1 0.854. v13 trained on it, so only v12 vs v14 is a fair comparison there.
+
+## 2026-11-11 -- v14 results (live detector, G:\BuzzWatch_LiveDetector\training)
+The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not found); relaunched 11-11 00:26 by
+`launch_v14_when_gpu_free.ps1` (waits until < 3 GB GPU used). Relabel 39,945 tiles (13 min), train 60 epochs
+00:40-08:55, all scoring done 09:32.
+- Gold round 1 (real kept / junk boxed / resting per frame), v13 -> v14: Aedes 0.86 -> 0.90 / 0.21 -> 0.18 / 29.6 -> 30.6;
+  Tbambusa 0.70 -> 0.77 / 0.13 -> 0.13 / 20.5 -> 22.7 (true about 28 / 21). Shadow boxed 0.26 -> 0.24, 0.36 -> 0.25.
+- Gold round 2: v14 boxes 56-57% of the real v12-only items with 3-8% of the false ones; it keeps 75% / 83% of the
+  real v13-only items (v13 100% by construction).
+- Test split (eval_centres, conf 0.21, 8 px): resting F1 0.760 (v13 0.769), flying 0.834, night flying 0.570;
+  resting count bias +1.4 / frame (v13 +1.8), MAE 3.6.
+- Unseen F 250 Hz run (vs 1.3.0 tracker labels, 16.4 resting / frame): v12 44.6 / F1 0.374 -> v14 26.9 / F1 0.522;
+  flying 0.854 -> 0.859. (v13 trained on it: 14.0 / 0.565.) The reference keeps only ~80% of real 720p resting
+  mosquitoes (round 2), so part of v14's excess may be real; a small gold set on this run would settle it.
+- Demo `demo/stack_v14_demo.mp4`: user: "much better", but resting boxes flash. Added `demo/stabilize.py` (resting
+  tracks: shown after 5 detections >= 0.30, kept alive down to 0.20, held 6 frames; EMA box; flying untouched), tuned
+  over 72 settings on cached v14 detections. Demo clips: resting boxes vanishing per second 7.8/25.8/20.4/36.1 ->
+  0.7/1.3/1.8/2.9, mean count vs raw -0.3..+0.8 / frame. `demo/stack_v14_smooth_demo.mp4`. Not yet in the Pi app.
+- 11-12: v14 compiled for the Hailo-10H with v12b's options: `hailo/stack_v14/yolov8s_stack_v14.hef` (README there).
+  Emulator on 1,195 1.3.0 test tiles: F1 any/resting/flying 0.831/0.792/0.861 (PyTorch) -> 0.826/0.790/0.847 (drop
+  0.005/0.002/0.014; v12b 0.005/0.003/0.012); passes. On-chip kit in the same folder (pi_parity.py + the 1,195 tiles);
+  chip check not run yet.
+- 11-16: PC -> Pi over Tailscale (`ssh buzzpi`, user penzance, 100.110.112.23, key login). v14 HEF on the chip
+  (1,195 tiles): F1 any/resting/flying 0.823/0.790/0.841 vs PyTorch 0.831/0.792/0.861 (drop 0.008/0.002/0.020; v12b
+  chip drop 0.005/0.002/0.016); chip-emulator agreement 0.981; 37.3 ms per sequential batch of 4 (= v12b). Passes,
+  flying right at the 0.02 line. No live-detector app on the Pi yet (only ~/hailo_bench); PiPeltier there is the
+  separate temperature controller.
+
 ## 2026-11-19 — BuzzSwarm swarm-zone radius; BuzzPhono wall control zones; feeder-zone checks
 
 - `517a3b7` BuzzSwarm: a "Swarm zone…" button (`swarm_zone_dialog.py`) sets the swarm-zone radius on a camera frame
@@ -96,3 +167,8 @@ hold the work itself).
 - Open: that experiment's `buzzwatch_track_settings.yml` has an empty `cage_border_points` (its geometry.json is
   older), so a BuzzSwarm rerun or the swarm-zone dialog there stops with "no cage border drawn" until the border is
   redrawn. Its experiment JSON still points at the old data drive's Light_Test folder.
+- 11-24: live kit `hailo/stack_v14_live/` sent to the Pi (`~/hailo_bench/stack_v14_live`, md5sum -c all 28 OK) for the
+  Pi side's live run with the Camera Module 3 NoIR (1536x864, 25 fps): HEF, README (contract, camera/scale notes),
+  `live_preprocess.py` (exporter tiling verbatim; check reproduces the 1080p training tile origins), stabilize.py,
+  exporter copies, pi_check (8 tiles + emulator output), clip_check (10 s 1080p clip + PyTorch-through-live-code boxes,
+  32.9 / frame = the demo). Training cage widths: ~1,165 px (1080p), ~770 px (720p); all 25 fps.
