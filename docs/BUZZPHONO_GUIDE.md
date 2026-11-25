@@ -679,6 +679,7 @@ and the 2.4-second chunk overlaps of the thesis clock.
 | *only N usable hour-cycles* | Too many hours failed the coverage rule. Check the Validate page for missing chunks |
 | *A worker process stopped abruptly* | Short of memory: use `--workers 2`. In your own scripts, start with `if __name__ == "__main__":` |
 | *Another BuzzPhono run … is working on this experiment's cache* | Wait for it to finish, or cancel it (`buzzphono status RUN --cancel`) |
+| *EnvironmentLocationNotFound: Not a conda environment: …\envs\buzzphono_env* or *BuzzPhono's environment (buzzphono_env) is not installed on this computer* | `buzzphono_env` was never created on this PC. In Anaconda Prompt, in the BuzzSuite folder: `conda env create -f environment-buzzphono.yml` (on Windows, `setup_env.bat` does it too) |
 | The app does not open | Run `buzzphono app` in a terminal to see the message; check `buzzphono_env` exists |
 
 ---

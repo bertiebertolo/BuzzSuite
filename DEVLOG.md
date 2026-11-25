@@ -172,3 +172,30 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   `live_preprocess.py` (exporter tiling verbatim; check reproduces the 1080p training tile origins), stabilize.py,
   exporter copies, pi_check (8 tiles + emulator output), clip_check (10 s 1080p clip + PyTorch-through-live-code boxes,
   32.9 / frame = the demo). Training cage widths: ~1,165 px (1080p), ~770 px (720p); all 25 fps.
+
+## 2026-11-25 — v1.0.0: hang, border, radius and install fixes; feeder tools merged; clean-up
+
+- **yolo_export:** `safe_pool.SafePool` runs one job per spawn worker over its own pipe; a worker that dies
+  (e.g. 0xC0000005 on a numpy-2-era pickle) or passes `--task-timeout` (default 1800 s) fails only its segment
+  (logged with experiment + file) and is replaced. The selftest has a crash/truncated/hang case (~6 s; the old
+  pool was still stuck after 30 s).
+- **BuzzSwarm:** a missing/invalid cage border raises `CageBorderMissing` in a preflight before any day loads; the
+  Run button and swarm-zone picker offer to open Setup → Draw Cage Borders; `swarm --which clock` exits with the
+  same message. Never guessed. `px_settings(radius)` scales central/core radii, shape rings, heatmap cells and
+  `fly_px_frame` with the swarm radius (s = r/100); outputs at 100 px are byte-identical; `geometry.json` records
+  the values. `NEAR_BAND_PX`, r50 and `prop_within_100/150` stay unscaled on purpose.
+- **App:** opening a second experiment kept the first one's settings (`em.settings` was reused); fixed.
+- **BuzzPhono tests:** the "worker process stopped abruptly" failures were test pollution: AppTest left a page as
+  `sys.modules['__main__']`, spawn workers re-ran it, and 2_Calibrate.py raises outside Streamlit. conftest puts
+  `__main__` back after each test; `test_main_module_restored.py` guards it. Production unaffected.
+- **Install:** a lab PC had only `buzzsuite_env`; Open the BuzzPhono app fell back to `conda run -n
+  buzzphono_env` → "EnvironmentLocationNotFound". The bridge now asks `conda env list --json`, uses the env's
+  python wherever it is, else says it is not installed and how to install it. `setup_env.bat` creates/checks
+  `buzzphono_env` too. README: Windows short way + Troubleshooting.
+- **tools/feeder_check** merged (rebased on main); uses the experiment's scaled `fly_px_frame`; excluded from ruff
+  (Python 3.8 app-side code).
+- **Clean-up:** deleted branches yolo-export, review/base, review/full (closes PR #3 unmerged), swarm-plots,
+  fix/review-pr3-findings and the two Copilot branches; removed the radius and swarm-plots worktrees; the old
+  BuzzSuite copy's legacy `buzzphono/` folder renamed `buzzphono_OLD`.
+- **Tests:** `tests/buzzsuite/` (stdlib runner, `python tests/buzzsuite/run_all.py`, no pytest needed in
+  buzzsuite_env). BuzzPhono 1.0.0. Tagged v1.0.0.

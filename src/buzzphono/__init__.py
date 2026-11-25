@@ -11,6 +11,6 @@ and the Streamlit app (:mod:`buzzphono.app`) only call into it. The guide is
 docs/BUZZPHONO_GUIDE.md.
 """
 
-__version__ = "1.0.0.dev0"
+__version__ = "1.0.0"
 
 __all__ = ["__version__"]
