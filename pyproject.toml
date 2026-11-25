@@ -101,6 +101,8 @@ line-length = 110
 target-version = "py310"
 src = ["src", "tests"]
 include = ["src/buzzphono/**/*.py", "tests/buzzphono/**/*.py", "tools/**/*.py"]
+# Python 3.8 tools that run in buzzwatch_env with the app (whose code ruff does not check either)
+extend-exclude = ["tools/feeder_check"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "NPY", "PD", "C4", "PIE", "RET"]

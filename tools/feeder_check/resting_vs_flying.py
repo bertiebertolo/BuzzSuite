@@ -102,7 +102,7 @@ def main():
     per = {k: sum(r[2][k] for r in res) for k in res[0][2]}
     h_fly = np.zeros_like(h_rest)
     for d in days:
-        p = c.real_flight_coords(c.load_day_cache(exp, d))
+        p = c.real_flight_coords(c.load_day_cache(exp, d), c.fly_px_frame(exp))
         h_fly += np.histogram2d(p[:, 0], p[:, 1], edges)[0]
 
     inside, zm, wallm = c.grid_masks(geo, zones, edges, a.ring)

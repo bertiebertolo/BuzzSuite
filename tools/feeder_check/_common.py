@@ -84,10 +84,16 @@ def grid_masks(geo, zones, edges, ring=DEFAULT_RING):
     return inside, zm, walls
 
 
-def real_flight_coords(day):
-    """The points the BuzzSwarm heatmap uses: flight pieces' points with smoothed speed >= FLY_PX_FRAME."""
-    sp = np.nan_to_num(ca.smoothed_motion(day["flight"])[0], nan=0.0)
-    return day["flight"]["coords"][sp >= ca.FLY_PX_FRAME]
+def fly_px_frame(exp):
+    """The experiment's real-flight speed threshold (px/frame): it scales with the swarm-zone radius."""
+    return ca.px_settings(ca.load_swarm_radius(exp))["fly_px_frame"]
+
+
+def real_flight_coords(day, fly_px=ca.FLY_PX_FRAME):
+    """The points the BuzzSwarm heatmap uses: flight pieces' points with smoothed speed >= fly_px
+    (pass fly_px_frame(exp); the default is the threshold at the default swarm radius)."""
+    sp = np.nan_to_num(ca.smoothed_motion(day["flight"], fly_px)[0], nan=0.0)
+    return day["flight"]["coords"][sp >= fly_px]
 
 
 def load_day_cache(exp, date):

@@ -63,7 +63,7 @@ def main():
         before = sum(h for h in pool.imap(raw_hist, [(f, tun, edges) for f in files]) if h is not None)
     after = np.zeros_like(before)
     for d in days:
-        p = c.real_flight_coords(c.load_day_cache(exp, d))
+        p = c.real_flight_coords(c.load_day_cache(exp, d), c.fly_px_frame(exp))
         after += np.histogram2d(p[:, 0], p[:, 1], edges)[0]
 
     inside, zm, _walls = c.grid_masks(geo, zones, edges)

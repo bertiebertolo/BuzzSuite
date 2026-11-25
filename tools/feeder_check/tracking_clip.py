@@ -2,7 +2,8 @@
 """Labelled tracking clip: every tracker detection coloured by what BuzzSwarm does with it.
 
   blue    kept as real flight (what the BuzzSwarm heatmap plots)
-  orange  removed: too slow (smoothed speed < FLY_PX_FRAME, 75 px/s at 25 fps)
+  orange  removed: too slow (smoothed speed below the experiment's real-flight
+          threshold: 3 px/frame = 75 px/s at 25 fps at the default 100 px swarm radius, scaled with it)
   purple  removed: short or jittery piece (step split / < FLIGHT_MIN_FRAMES / average-speed bounds)
   grey    resting tracker (state 0)
 Zones from custom_zones.json are outlined; the corner box shows the timestamp and per-frame counts.
@@ -28,13 +29,14 @@ import _common as c  # noqa: E402
 
 REAL, SLOW, PIECE, REST = 0, 1, 2, 3
 COL = {REAL: (232, 160, 40), SLOW: (40, 140, 245), PIECE: (200, 60, 230), REST: (170, 170, 170)}  # BGR
-NAME = {REAL: "kept: real flight (heatmap)", SLOW: "removed: too slow (<75 px/s)",
+NAME = {REAL: "kept: real flight (heatmap)", SLOW: "removed: too slow",
         PIECE: "removed: short/jittery piece", REST: "resting tracker"}
 
 
-def classify(mt, f0, f1, offset):
+def classify(mt, f0, f1, offset, fly_px=None):
     """{video frame: [(x, y, category, track key)]} for frames [f0 - 15, f1)."""
     m, ca = c.m, c.ca
+    fly_px = ca.FLY_PX_FRAME if fly_px is None else fly_px
     ts = mt.time_stamp
     per_frame = {}
 
@@ -96,7 +98,7 @@ def classify(mt, f0, f1, offset):
                             sp = 0.0
                             if 2 <= q < len(pk) - 2:  # same smoothing as clock_analysis.smoothed_motion
                                 sp = math.hypot(arr[q + 2, 0] - arr[q - 2, 0], arr[q + 2, 1] - arr[q - 2, 1]) / 4.0
-                            cat = REAL if sp >= ca.FLY_PX_FRAME else SLOW
+                            cat = REAL if sp >= fly_px else SLOW
                         add(s + k + offset, arr[q, 0], arr[q, 1], cat, key)
             for k in range(i, j):
                 if k not in claimed and m.valid_point(coords[k]):
@@ -140,7 +142,9 @@ def main():
     print("video %.2f fps, %d frames, %dx%d | %d tracking timestamps" % (fps, nvid, W, H, len(ts)))
     f0 = int(a.start * fps)
     f1 = min(nvid, f0 + int(a.dur * fps))
-    per_frame = classify(mt, f0, f1, a.offset)
+    fly_px = c.fly_px_frame(exp)
+    NAME[SLOW] = "removed: too slow (<%.1f px/frame)" % fly_px
+    per_frame = classify(mt, f0, f1, a.offset, fly_px)
 
     zp = {k: np.asarray(v, np.int32) for k, v in zones.items()}
     zpaths = [Path(v) for v in zones.values()]
