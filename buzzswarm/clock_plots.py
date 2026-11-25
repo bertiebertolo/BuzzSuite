@@ -488,7 +488,11 @@ def heatmaps(heatmap, geometry=None):
     geometry = geometry or {}
     groups = _groups(heatmap)
     order = _window_order(heatmap['window'])
-    cell = ca.HEAT_CELL_PX
+    # the experiments' own cell size (it scales with their swarm zone); with several sizes, the
+    # largest, into which the smaller cells are summed by their centres
+    cells = [float(geometry[e].get('heat_cell_px') or ca.HEAT_CELL_PX)
+             for e in heatmap['experiment'].unique() if e in geometry]
+    cell = max(cells) if cells else float(ca.HEAT_CELL_PX)
     half = float(max(heatmap.x_px.abs().max(), heatmap.y_px.abs().max())) + cell / 2.0
     edges = np.arange(-half, half + cell / 2.0, cell)
     n = len(edges) - 1

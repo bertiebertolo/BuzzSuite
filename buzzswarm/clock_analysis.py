@@ -48,7 +48,10 @@ Metrics per clock bin / window (pixels; distances from the cage centroid):
   n_traj, recorded_frac   counts / how much of the bin was recorded
 Per window also: the swarm-size distribution, a centre profile (real-flight density per 20-px ring)
 and a heatmap (real flight per 20-px cell around the centroid). clock_plots.py draws all of these
-from the CSVs.
+from the CSVs. The pixel sizes above are for the default 100 px swarm zone (the old 720p camera);
+when a swarm radius is chosen for an experiment, the central and core discs, the shape rings, the
+heatmap cell and the real-flight speed threshold scale with it (px_settings; geometry.json records
+the values used).
 
 Read-only with respect to tracking: nothing here changes the tracker, the .pkl format or the engine.
 """
@@ -87,6 +90,10 @@ SHAPE_MAX_PX = 240                     # rings considered for shape_index (ignor
 NEAR_BAND_PX = (45, 100)               # "together" band: outside the ~30 px blind zone + its edge
 SHIFTS_S = (-120, -60, 60, 120)        # time-shifted control offsets
 HEAT_CELL_PX = 20                      # heatmap cell size (windows only)
+# FLY_PX_FRAME, CENTRAL_RADIUS_PX, CORE_PX, SHAPE_RING_PX, SHAPE_MAX_PX and HEAT_CELL_PX are the values
+# for the default swarm zone (SWARM_RADIUS_PX, the old 720p camera). For an experiment whose swarm
+# zone was set larger or smaller (swarm_zone_dialog, e.g. Camera Module 3), they all scale with it:
+# see px_settings(). NEAR_BAND_PX and the engine's r50 / prop_within_100 / prop_within_150 do not.
 MIN_POINTS = 500                       # fewer real-flight points than this -> spatial metrics NaN
 MIN_PAIRS = 100                        # fewer simultaneous pairs than this -> pair metrics NaN
 MIN_SAMPLES = 100                      # fewer speed / turning samples than this -> NaN
@@ -281,9 +288,29 @@ def cage_geometry(experiment_dir):
     return m.calculate_cage_centroid(polygon.tolist()), polygon
 
 
-def _area_shares(polygon, centroid, swarm_radius, n=400_000, seed=0):
+def px_settings(swarm_radius_px=SWARM_RADIUS_PX):
+    """The pixel settings for a swarm zone of this radius. A camera that sees the cage larger in
+    pixels gets a larger swarm zone in the swarm-zone picker, and the other zones, the heatmap cell
+    and the real-flight speed threshold (px/frame) scale with it by swarm_radius_px /
+    SWARM_RADIUS_PX. With the default radius (no radius chosen) they are exactly the module
+    constants above."""
+    s = float(swarm_radius_px) / SWARM_RADIUS_PX if swarm_radius_px else 1.0
+    if not np.isfinite(s) or s <= 0:
+        raise ValueError(f'swarm radius must be a positive number of pixels, not {swarm_radius_px!r}')
+    return {'scale': s, 'central_radius_px': CENTRAL_RADIUS_PX * s, 'core_px': CORE_PX * s,
+            'shape_ring_px': SHAPE_RING_PX * s, 'shape_max_px': SHAPE_MAX_PX * s,
+            'heat_cell_px': HEAT_CELL_PX * s, 'fly_px_frame': FLY_PX_FRAME * s}
+
+
+def _px(geo):
+    """The geometry's pixel settings (px_settings of its swarm radius)."""
+    return geo.get('px') or px_settings(geo.get('swarm_radius', SWARM_RADIUS_PX))
+
+
+def _area_shares(polygon, centroid, swarm_radius, n=400_000, seed=0, px=None):
     """Share of the cage polygon's area inside the swarm disc, the central disc, the core disc and
-    each 20-px ring out to SHAPE_MAX_PX (uniform Monte Carlo, fixed seed)."""
+    each shape ring out to the shape limit (uniform Monte Carlo, fixed seed). px: px_settings()."""
+    px = px or px_settings()
     from matplotlib.path import Path
     rng = np.random.default_rng(seed)
     pts = np.empty((0, 2))
@@ -293,10 +320,16 @@ def _area_shares(polygon, centroid, swarm_radius, n=400_000, seed=0):
         cand = rng.uniform(lo, hi, size=(n, 2))
         pts = np.vstack([pts, cand[path.contains_points(cand)]])
     r = np.hypot(pts[:n, 0] - centroid[0], pts[:n, 1] - centroid[1])
-    rings = np.arange(0, SHAPE_MAX_PX + SHAPE_RING_PX, SHAPE_RING_PX)
-    return {'swarm': float(np.mean(r < swarm_radius)), 'central': float(np.mean(r < CENTRAL_RADIUS_PX)),
-            'core': float(np.mean(r < CORE_PX)),
+    rings = _ring_edges(px)
+    return {'swarm': float(np.mean(r < swarm_radius)), 'central': float(np.mean(r < px['central_radius_px'])),
+            'core': float(np.mean(r < px['core_px'])),
             'ring_edges': rings, 'rings': np.histogram(r, rings)[0] / float(n)}
+
+
+def _ring_edges(px):
+    """Shape-ring edges 0, ring, 2 ring, ... shape limit (a whole number of rings at any scale)."""
+    n_rings = int(round(SHAPE_MAX_PX / float(SHAPE_RING_PX)))
+    return np.arange(n_rings + 1) * px['shape_ring_px']
 
 
 SWARM_ZONE_FILE = 'swarm_zone.json'    # per experiment, in plots/buzzswarm/: {"swarm_radius_px": N}
@@ -347,10 +380,19 @@ def cage_reference_image(experiment_dir):
 
 def experiment_geometry(experiment_dir, swarm_radius_px=SWARM_RADIUS_PX):
     centroid, polygon = cage_geometry(experiment_dir)
-    half = np.ceil(np.abs(polygon - np.asarray(centroid, dtype=float)).max() / HEAT_CELL_PX) * HEAT_CELL_PX
-    return {'centroid': centroid, 'polygon': polygon, 'swarm_radius': float(swarm_radius_px),
-            'areas': _area_shares(polygon, centroid, float(swarm_radius_px)),
-            'heat_edges': np.arange(-half, half + HEAT_CELL_PX, HEAT_CELL_PX)}
+    return geometry_from(centroid, polygon, swarm_radius_px)
+
+
+def geometry_from(centroid, polygon, swarm_radius_px=SWARM_RADIUS_PX):
+    """The geometry dict day_metrics uses, for a cage (centroid, polygon) and swarm radius; every
+    other pixel setting follows the radius (px_settings)."""
+    polygon = np.asarray(polygon, dtype=float)
+    px = px_settings(swarm_radius_px)
+    cell = px['heat_cell_px']
+    k = int(np.ceil(np.abs(polygon - np.asarray(centroid, dtype=float)).max() / cell))
+    return {'centroid': centroid, 'polygon': polygon, 'swarm_radius': float(swarm_radius_px), 'px': px,
+            'areas': _area_shares(polygon, centroid, float(swarm_radius_px), px=px),
+            'heat_edges': np.arange(-k, k + 1) * cell}
 
 
 # ==== Per-day build (streamed, cached) ====
@@ -595,10 +637,10 @@ def _track_table(tracks, centroid):
     }
 
 
-def smoothed_motion(flight):
+def smoothed_motion(flight, fly_px_frame=FLY_PX_FRAME):
     """Per point: smoothed speed (px/frame, displacement i-2 -> i+2 / 4) and turning (deg/frame,
     between the 2-frame displacements before and after the point, only where both are >= 2 x
-    FLY_PX_FRAME). NaN where the piece is too short around the point."""
+    fly_px_frame). NaN where the piece is too short around the point."""
     c, off = flight['coords'], flight['offsets']
     pid = np.repeat(np.arange(len(off) - 1), np.diff(off))
     n = len(pid)
@@ -609,7 +651,7 @@ def smoothed_motion(flight):
         speed[2:-2][ok] = np.hypot(c[4:, 0] - c[:-4, 0], c[4:, 1] - c[:-4, 1])[ok] / 4.0
         ax_, ay_ = c[2:-2, 0] - c[:-4, 0], c[2:-2, 1] - c[:-4, 1]
         bx_, by_ = c[4:, 0] - c[2:-2, 0], c[4:, 1] - c[2:-2, 1]
-        ok &= (np.hypot(ax_, ay_) >= 2 * FLY_PX_FRAME) & (np.hypot(bx_, by_) >= 2 * FLY_PX_FRAME)
+        ok &= (np.hypot(ax_, ay_) >= 2 * fly_px_frame) & (np.hypot(bx_, by_) >= 2 * fly_px_frame)
         ang = np.degrees(np.abs(np.angle(np.exp(1j * (np.arctan2(by_, bx_) - np.arctan2(ay_, ax_))))))
         turn[2:-2][ok] = ang[ok] / 2.0
     return speed, turn, pid
@@ -618,8 +660,9 @@ def smoothed_motion(flight):
 def _flight_table(flight, fps, d0, geo):
     """Real-flight points sorted by time, plus per-frame counts for the whole day: all real
     flyers and those inside the swarm zone, and which frames were recorded at all."""
-    speed, turn, pid = smoothed_motion(flight)
-    real = np.nan_to_num(speed, nan=0.0) >= FLY_PX_FRAME
+    fly = _px(geo)['fly_px_frame']
+    speed, turn, pid = smoothed_motion(flight, fly)
+    real = np.nan_to_num(speed, nan=0.0) >= fly
     c, t = flight['coords'][real], flight['t_ns'][real]
     frame_ns = _NS / float(fps)
     f = np.rint((t - d0) / frame_ns).astype(np.int64)
@@ -716,7 +759,7 @@ def _window_maps(ft, geo, lo, hi, n_rec):
     cx, cy = geo['centroid']
     H = np.histogram2d(ft['x'][pa:pb] - cx, ft['y'][pa:pb] - cy, [he, he])[0]
     ix, iy = np.nonzero(H)
-    half, n = HEAT_CELL_PX / 2.0, float(pb - pa)
+    half, n = _px(geo)['heat_cell_px'] / 2.0, float(pb - pa)
     heat = [{'x_px': float(he[i] + half), 'y_px': float(he[j] + half),
              'share': H[i, j] / n, 'per_frame': H[i, j] / float(n_rec)} for i, j in zip(ix, iy)]
     return profile, heat
@@ -744,8 +787,9 @@ def _interval_metrics(tr, ft, rec, geo, day, lo, hi, d0):
     areas = geo['areas']
     r = ft['r'][pa:pb]
     if pb - pa >= MIN_POINTS:
-        out['central_enrichment'] = float(np.mean(r < CENTRAL_RADIUS_PX)) / areas['central']
-        core = float(np.mean(r < CORE_PX)) / areas['core']
+        px = _px(geo)
+        out['central_enrichment'] = float(np.mean(r < px['central_radius_px'])) / areas['central']
+        core = float(np.mean(r < px['core_px'])) / areas['core']
         ring_density = _ring_density(r, areas)
         out['core_density'] = core
         out['shape_index'] = core / float(np.nanmax(ring_density)) if np.any(ring_density > 0) else np.nan
@@ -918,8 +962,12 @@ def _write_geometry(out_dir, alias, group, geo):
     cx, cy = (float(v) for v in geo['centroid'])
     payload = {'experiment': alias, 'group': group, 'centroid': [cx, cy],
                'polygon': [[float(x), float(y)] for x, y in geo['polygon']],
-               'swarm_radius_px': geo['swarm_radius'], 'central_radius_px': CENTRAL_RADIUS_PX,
-               'core_px': CORE_PX}
+               'swarm_radius_px': geo['swarm_radius']}
+    px = _px(geo)
+    payload.update({'px_scale': px['scale'], 'central_radius_px': px['central_radius_px'],
+                    'core_px': px['core_px'], 'shape_ring_px': px['shape_ring_px'],
+                    'shape_max_px': px['shape_max_px'], 'heat_cell_px': px['heat_cell_px'],
+                    'fly_px_frame': px['fly_px_frame']})
     with open(os.path.join(out_dir, 'geometry.json'), 'w') as f:
         json.dump(payload, f, indent=2)
     return payload
