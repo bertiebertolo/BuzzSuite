@@ -306,6 +306,11 @@ def _swarm_clock(args, exp_dirs):
                        int(schedule.get('night_end_hour', ld_dd.DEFAULT_NIGHT[1]))))
     if not experiments:
         raise SystemExit("No days to analyse (see above). Pass --days YYYY-MM-DD ...")
+    no_border = [(e['folder'], why) for e in experiments for why in [ca.cage_border_problem(e['folder'])] if why]
+    if no_border:
+        raise SystemExit("No cage border saved, so nothing was run (BuzzSwarm measures every flight from the "
+                         "cage centre and never guesses the cage):\n%s\nDraw it in the app: Setup > Background & "
+                         "Cage Border > Draw Cage Borders." % "\n".join("  %s: %s" % nb for nb in no_border))
     night = nights[0]
     if len(set(nights)) > 1:
         _log("  note: the experiments have different light hours; plots shade the first one's night.")

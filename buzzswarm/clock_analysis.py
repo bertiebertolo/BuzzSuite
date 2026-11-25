@@ -228,17 +228,53 @@ def default_windows(night_start=17, night_end=5):
 
 # ==== Cage geometry ====
 
-def cage_geometry(experiment_dir):
-    """(centroid, polygon (k, 2) array) from the experiment's buzzwatch_track_settings.yml."""
+class CageBorderMissing(ValueError):
+    """The experiment has no usable cage border. BuzzSwarm measures every flight from the cage
+    centre, so it cannot run without one, and it never guesses one: the user draws it (Setup tab,
+    Draw Cage Borders). `problems` is a list of (experiment_dir, reason)."""
+
+    def __init__(self, problems):
+        self.problems = list(problems)
+        lines = '\n'.join(f'  {d}: {why}' for d, why in self.problems)
+        super().__init__(f'no cage border saved for {len(self.problems)} experiment(s):\n{lines}\n'
+                         'Draw it in the Setup tab (Background & Cage Border, Draw Cage Borders), then run again.')
+
+
+def _cage_points(experiment_dir):
+    """(polygon (k, 2) float array, None) or (None, reason) from the experiment's
+    buzzwatch_track_settings.yml."""
     path = os.path.join(experiment_dir, 'buzzwatch_track_settings.yml')
     if not os.path.isfile(path):
-        raise FileNotFoundError(f'no buzzwatch_track_settings.yml in {experiment_dir}')
-    with open(path, 'r') as f:
-        settings = yaml.safe_load(f) or {}
-    pts = settings.get('cage_border_points')
-    if not pts or len(pts) < 3:
-        raise ValueError(f'no cage border drawn for {experiment_dir}')
-    polygon = np.asarray(pts, dtype=float)
+        return None, 'no buzzwatch_track_settings.yml in the experiment folder'
+    try:
+        with open(path, 'r') as f:
+            settings = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return None, f'buzzwatch_track_settings.yml could not be read ({exc})'
+    pts = settings.get('cage_border_points') if isinstance(settings, dict) else None
+    if not pts:
+        return None, 'the cage border has never been drawn'
+    try:
+        polygon = np.asarray(pts, dtype=float)
+    except (TypeError, ValueError):
+        polygon = None
+    if polygon is None or polygon.ndim != 2 or polygon.shape[1] != 2 or len(polygon) < 3 \
+            or not np.isfinite(polygon).all():
+        return None, 'the saved cage border is not a polygon of at least 3 points'
+    return polygon, None
+
+
+def cage_border_problem(experiment_dir):
+    """None if the experiment has a usable cage border, else a short reason why not."""
+    return _cage_points(experiment_dir)[1]
+
+
+def cage_geometry(experiment_dir):
+    """(centroid, polygon (k, 2) array) from the experiment's buzzwatch_track_settings.yml.
+    Raises CageBorderMissing (a ValueError) when there is no usable border."""
+    polygon, why = _cage_points(experiment_dir)
+    if why:
+        raise CageBorderMissing([(experiment_dir, why)])
     # Float points on purpose: from the YAML's ints the helper builds a platform-int array, int32 on
     # Windows (numpy 1.x), whose shoelace sums overflow for 1080p cages -- a 1920x1080 cage came out
     # at (279, -48), outside the cage, instead of (854, 527). Floats give the intended centroid.
@@ -819,6 +855,11 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
     units = [(e, d) for e in experiments for d in e['days']]
     if not units:
         raise ValueError('no days selected')
+    # every cage border up front: one missing border must not stop a long run half way
+    problems = [(e['folder'], why) for e in experiments if e['days']
+                for why in [cage_border_problem(e['folder'])] if why]
+    if problems:
+        raise CageBorderMissing(problems)
     tables = {k: [] for k in output_names(bin_minutes)}
     geometry = {}
     done = 0

@@ -458,6 +458,11 @@ class BuzzswarmTabManager:
                              "analysis to apply it (days already analysed rerun in seconds).")
             self.log(f"BuzzSwarm: swarm radius for {entry['alias']} saved as {int(radius)} px.")
 
+        ca, _cp = _engine()
+        why = ca.cage_border_problem(entry['folder'])
+        if why:
+            self._offer_draw_border([(entry, why)], "The swarm-zone picker")
+            return
         from swarm_zone_dialog import SwarmZoneDialog
         try:
             SwarmZoneDialog(self.root, entry['folder'], entry['alias'], entry.get('swarm_radius'),
@@ -466,6 +471,66 @@ class BuzzswarmTabManager:
             self.ui_manager.show_error("BuzzSwarm — swarm zone",
                                        f"Can't show the cage for {entry['alias']}:\n{exc}\n\n"
                                        "Draw the cage border in the Setup tab first.")
+
+    # ---------------------------------------------------------------- missing cage border
+    def _offer_draw_border(self, missing, doing):
+        """Say which experiments have no cage border (nothing was run) and offer to open the first
+        one in Setup > Background & Cage Border, where the user draws it. Never guesses a border."""
+        from tkinter import messagebox
+        lines = "\n".join(f"  • {e['alias']}: {why}" for e, why in missing)
+        first = missing[0][0]
+        self.log(f"BuzzSwarm: no cage border for {', '.join(e['alias'] for e, _ in missing)}; nothing was run.")
+        self._set_status(f"Cage border needed for {', '.join(e['alias'] for e, _ in missing)}.")
+        msg = (f"{doing} needs the cage border, which isn't saved for:\n{lines}\n\n"
+               "BuzzSwarm measures every flight from the centre of the cage, so it can't run "
+               "without the cage outline, and it won't guess one. Nothing was run.\n\n"
+               f"Open {first['alias']} in Setup > Background & Cage Border now, to draw it with "
+               "Draw Cage Borders?")
+        try:
+            go = messagebox.askyesno("BuzzSwarm — cage border needed", msg, parent=self.root)
+        except Exception:
+            go = False
+        if go:
+            self._open_for_border(first)
+
+    def _open_for_border(self, entry):
+        """Load the experiment (its experiment_*.json) as the app's current experiment and show
+        Setup > Background & Cage Border."""
+        import glob
+        jsons = sorted(glob.glob(os.path.join(entry['folder'], 'experiment_*.json')))
+        if not jsons:
+            self.ui_manager.show_error(
+                "BuzzSwarm — cage border",
+                f"No experiment_*.json in\n{entry['folder']}\n\nOpen the experiment from the welcome "
+                "screen, then draw the border in Setup > Background & Cage Border.")
+            return
+        em = self.experiment_manager
+        previous, em.settings = em.settings, None     # read this experiment's own settings, not the last one's
+        try:
+            em.load_experiment_from_json(jsons[0])
+            self.ui_manager.update_ui_after_loading_experiment()
+            self.ui_manager.set_status(experiment=em.experiment_alias, action="Loaded experiment")
+        except Exception as exc:
+            if em.settings is None:
+                em.settings = previous                 # the previous experiment stays loaded
+            self.ui_manager.show_error("BuzzSwarm — cage border",
+                                       f"Could not open {entry['alias']}:\n{exc}")
+            return
+        self._select_setup_border_tab()
+        self._set_status(f"{entry['alias']} is open in Setup: click Draw Cage Borders, then come back "
+                         "and run again.")
+        self.log(f"BuzzSwarm: opened {entry['alias']} in Setup to draw its cage border.")
+
+    def _select_setup_border_tab(self):
+        ui = self.ui_manager
+        try:
+            for nb, text in ((ui.notebook, "1 · Setup"), (ui.setup_notebook, "Background & Cage Border")):
+                for tab_id in nb.tabs():
+                    if nb.tab(tab_id, "text") == text:
+                        nb.select(tab_id)
+                        break
+        except Exception:  # noqa: BLE001 -- the status line already says where to go
+            pass
 
     def _on_remove_clicked(self):
         idx = self._selected_entry_idx()
@@ -680,8 +745,12 @@ class BuzzswarmTabManager:
         snap = self._snapshot()
         if snap is None:
             return
-        self._save_days(snap['entries'])
         ca, cp = _engine()
+        missing = [(e, why) for e in snap['entries'] for why in [ca.cage_border_problem(e['folder'])] if why]
+        if missing:
+            self._offer_draw_border(missing, "Run analysis")
+            return
+        self._save_days(snap['entries'])
         view = snap['view']
         n_days = sum(len(x['days']) for x in snap['experiments'])
 
