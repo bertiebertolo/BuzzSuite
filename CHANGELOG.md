@@ -3,6 +3,14 @@
 All notable changes to BuzzSuite. Dates are release dates; the [DEVLOG](DEVLOG.md) has the
 day-by-day working notes.
 
+## [Unreleased]
+
+- **Intake:** choosing the data folder no longer silently makes a new data tree inside an
+  experiment (one lab PC got `…\tracking_moving\Buzzwatch\Analysis\…`, and every later experiment
+  went there). A folder inside an experiment or inside an Analysis/Recording tree now gets a
+  warning (default: No), and an existing data folder is used as it is instead of getting a second
+  `Buzzwatch` inside it.
+
 ## [1.0.0] — 2026-11-25
 
 The first release. BuzzSuite takes a user from raw Raspberry Pi video to finished behavioural

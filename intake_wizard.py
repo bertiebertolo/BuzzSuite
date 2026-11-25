@@ -77,6 +77,38 @@ def _segment_actual_dates(date_str, time_str, seg_str):
     return {start.strftime("%Y%m%d"), end.strftime("%Y%m%d")}       # spurious 3rd day at exact midnight
 
 
+_INSIDE_EXPERIMENT = ("final_tracking_data", "tracking_moving", "tracking_resting")
+
+
+def data_root_choice(picked):
+    """(data folder, problem) for a folder picked as the data root's location.
+
+    A folder that already holds Recording/ and Analysis/ IS a data folder and is used as it is;
+    otherwise a 'Buzzwatch' folder inside it becomes the data folder. ``problem`` says why the
+    pick looks wrong (inside an experiment, or inside a data folder's Analysis/Recording tree), or
+    is None. A lab PC once got a whole new data tree inside an experiment's tracking_moving/."""
+    picked = os.path.normpath(os.path.abspath(picked))
+    if all(os.path.isdir(os.path.join(picked, d)) for d in ("Recording", "Analysis")):
+        return picked, None
+    target = os.path.join(picked, "Buzzwatch")
+    chain = [picked]
+    while os.path.dirname(chain[-1]) != chain[-1]:
+        chain.append(os.path.dirname(chain[-1]))
+    for d in chain:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        if any(n.startswith("experiment_") and n.endswith(".json") for n in names) or \
+                any(os.path.isdir(os.path.join(d, s)) for s in _INSIDE_EXPERIMENT):
+            return target, ("the experiment folder %s" % d if d == picked
+                            else "inside the experiment folder %s" % d)
+    for d in chain:
+        if os.path.basename(d).lower() in ("analysis", "recording"):
+            return target, "inside %s, part of an existing data folder" % d
+    return target, None
+
+
 class IntakeWizardTabManager:
     ASSAY_TYPES = ["Phonotaxis", "Lightctrl", "Nosound"]
 
@@ -186,9 +218,10 @@ class IntakeWizardTabManager:
         self.dataroot_label.pack(side=tk.LEFT)
         browse_root_btn = tk.Button(dataroot_row, text="Browse…", command=self._browse_data_root)
         browse_root_btn.pack(side=tk.LEFT, padx=(8, 0))
-        add_tooltip(browse_root_btn, "Pick a drive or folder to hold the data — e.g. a different "
-                    "drive than the one auto-detected above. A 'Buzzwatch' folder (with the "
-                    "Recording/ and Analysis/ trees) is created there if it doesn't exist yet. "
+        add_tooltip(browse_root_btn, "Pick a drive or top folder to hold the data — e.g. a different "
+                    "drive than the one auto-detected above — or an existing Buzzwatch folder. A "
+                    "'Buzzwatch' folder (with the Recording/ and Analysis/ trees) is created there if it "
+                    "doesn't exist yet. Not an experiment's folder: this is where ALL experiments go. "
                     "Remembered for next time.")
         reset_root_btn = tk.Button(dataroot_row, text="Auto-detect", command=self._reset_data_root)
         reset_root_btn.pack(side=tk.LEFT, padx=(4, 0))
@@ -561,11 +594,18 @@ class IntakeWizardTabManager:
         if not initial or not os.path.isdir(initial):
             initial = os.path.expanduser("~")
         picked = filedialog.askdirectory(
-            title="Select the drive/folder where the Buzzwatch data folder should be created",
+            title="Choose a drive or top folder for the data folder, or an existing data folder",
             initialdir=initial)
         if not picked:
             return
-        buzzwatch_dir = os.path.join(picked, "Buzzwatch")
+        buzzwatch_dir, problem = data_root_choice(picked)
+        if problem and not messagebox.askyesno(
+                "Intake",
+                "That folder is %s.\n\nThe data folder holds Recording and Analysis for all your "
+                "experiments, and is remembered for every new experiment. It normally goes straight on a "
+                "drive or top folder.\n\nCreate a new data folder here anyway?\n%s"
+                % (problem, buzzwatch_dir), icon="warning", default="no"):
+            return
         try:
             os.makedirs(os.path.join(buzzwatch_dir, "Recording"), exist_ok=True)
             os.makedirs(os.path.join(buzzwatch_dir, "Analysis"), exist_ok=True)

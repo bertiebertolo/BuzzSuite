@@ -199,3 +199,4 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   BuzzSuite copy's legacy `buzzphono/` folder renamed `buzzphono_OLD`.
 - **Tests:** `tests/buzzsuite/` (stdlib runner, `python tests/buzzsuite/run_all.py`, no pytest needed in
   buzzsuite_env). BuzzPhono 1.0.0. Tagged v1.0.0.
+- **Intake (after the tag):** the data-folder Browse made a whole data tree inside an experiment's `tracking_moving/` on a lab PC (picked folder + `Buzzwatch`, remembered for every later experiment). `data_root_choice()` now uses an existing data folder as it is and warns (default No) for a folder inside an experiment or an Analysis/Recording tree. Feeder branch deleted after merge (GitHub copy was the same commit pre-rebase). `D:\BuzzSuite\DEVLOG.md` is byte-identical to the G: one (ends 09-25): the 09-25 to 11-05 log is not recoverable from there.

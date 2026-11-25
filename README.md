@@ -187,6 +187,7 @@ carries on.
 | BuzzPhono is still not found, although `buzzphono_env` exists | It is somewhere unusual. Set the `BUZZPHONO_PYTHON` environment variable to its `python.exe` (for example `…\envs\buzzphono_env\python.exe`). |
 | The BuzzPhono app stops before its page opens, with another message | The message shows the last lines of `.buzzphono_app.log` in your home folder. For the full error, run `conda activate buzzphono_env` and then `buzzphono app` in Anaconda Prompt. |
 | Plotting crashes or Python closes when a plot is drawn (Windows) | The conda-forge numpy/matplotlib builds crash on PCs with Memory Integrity + CET. Run `setup_env.bat`, which installs the PyPI builds instead. |
+| A new experiment's path runs through another experiment, e.g. `…\ExpA\tracking_moving\Buzzwatch\Analysis\…` | The data folder was set (Intake tab, **Browse…** next to the data folder) to a folder inside an experiment, and every new experiment goes there. Click **Auto-detect**, or **Browse…** to the drive or top folder that holds your data. Then move the stray `Buzzwatch\Analysis\…` and `Buzzwatch\Recording\…` folders into your real data folder's `Analysis` and `Recording`; the app finds a moved experiment by itself. Versions after 1.0.0 warn before making a data folder inside an experiment. |
 | `run_buzzsuite.bat` says "buzzsuite_env was not found" | The app's environment is not installed. Run `setup_env.bat` from Anaconda Prompt in the BuzzSuite folder. |
 
 ## The data folder layout
