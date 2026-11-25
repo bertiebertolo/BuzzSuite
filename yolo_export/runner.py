@@ -11,18 +11,21 @@
     docs       README.md, docs/ROADMAP.md, docs/definitions.json
     all        everything above, in order
 
-Segment work runs in a spawn-safe multiprocessing pool whose workers exit with the parent.
+Segment work runs in spawn worker processes (safe_pool.SafePool) that exit with the parent. A
+segment whose worker crashes (e.g. an unreadable numpy-2-era pickle) or runs past the per-task
+timeout is logged as an error naming its file and skipped; the run carries on.
 """
 import datetime as _dt
-import multiprocessing as mp
 import os
 import time
 
 import numpy as np
 
 from yolo_export import common as C
+from yolo_export.safe_pool import SafePool
 
 ACTIONS = ("inventory", "annotate", "verify", "clock", "frames", "build", "clips", "qa", "docs", "all")
+DEFAULT_TASK_TIMEOUT = 1800   # s per job (one segment, clip or tile group); a stuck worker is stopped after this
 
 
 def _logger(out_dir, base_log):
@@ -41,22 +44,44 @@ def _init_worker():
     _exit_with_parent()
 
 
-def pool_run(fn, jobs, workers, log, label):
-    """Run fn over jobs (each returns (name, status, message)); log progress and errors."""
+def job_name(job):
+    """How a job is named in results and the log: the segment stem, or the clip name."""
+    if "start" in job and "stem" in job:
+        return "%s_%05d" % (job["stem"], int(job["start"]))
+    return job.get("stem") or job.get("name") or "?"
+
+
+def job_file(job):
+    """The input file a segment job reads first (its tracking pickle), for crash reports."""
+    if job.get("exp_dir") and job.get("stem"):
+        return os.path.join(job["exp_dir"], "final_tracking_data", C.TRACK_PREFIX + job["stem"])
+    return ""
+
+
+def _failed(job, message):
+    """The result of a job whose worker died, hung or raised: an error naming the file, so the run
+    carries on without it."""
+    where = job_file(job)
+    alias = job.get("alias")
+    return (job_name(job), "error", "%s%s%s" % (message, "; experiment %s" % alias if alias else "",
+                                                 "; file %s" % where if where else ""))
+
+
+def pool_run(fn, jobs, workers, log, label, timeout=DEFAULT_TASK_TIMEOUT):
+    """Run fn over jobs (each returns (name, status, message)); log progress and errors.
+
+    Jobs always run in worker processes (SafePool), so a job whose worker dies outright (e.g. an
+    access violation while unpickling) or runs past `timeout` seconds becomes one 'error' result
+    naming its file, and the other jobs carry on."""
     if not jobs:
         log("  %s: nothing to do" % label)
         return []
     t0 = time.time()
-    results, pool = [], None
-    if workers > 1 and len(jobs) > 1:
-        pool = mp.get_context("spawn").Pool(min(workers, len(jobs)), maxtasksperchild=20,
-                                            initializer=_init_worker)
-        it = pool.imap_unordered(fn, jobs)
-    else:
-        it = map(fn, jobs)
+    results = []
+    pool = SafePool(min(workers, len(jobs)), initializer=_init_worker, maxtasksperchild=20, timeout=timeout)
     ok = False
     try:
-        for i, r in enumerate(it, 1):
+        for i, r in enumerate(pool.imap_unordered(fn, jobs, _failed), 1):
             results.append(r)
             if r[1] == "error":
                 log("    ! %s: %s" % (r[0], r[2]))
@@ -64,12 +89,10 @@ def pool_run(fn, jobs, workers, log, label):
                 log("    %s %d/%d  (%.0f s)" % (label, i, len(jobs), time.time() - t0))
         ok = True
     finally:
-        if pool is not None:
-            if ok:
-                pool.close()
-            else:
-                pool.terminate()          # Ctrl-C / error: stop now, don't wait for queued work
-            pool.join()
+        if ok:
+            pool.close()
+        else:
+            pool.terminate()          # Ctrl-C / error: stop now, don't wait for queued work
     n = {}
     for r in results:
         n[r[1]] = n.get(r[1], 0) + 1
@@ -77,19 +100,24 @@ def pool_run(fn, jobs, workers, log, label):
     return results
 
 
-def _pool_map(workers):
+def _tiles_failed(job, message):
+    """build.write_tiles' result for a job whose worker died or hung: no tiles, one error."""
+    first = job["frames"][0]["png"] if job.get("frames") else "?"
+    return 0, ["tiles of %d frame(s) from %s not written: %s" % (len(job.get("frames") or []), first, message)]
+
+
+def _pool_map(workers, timeout=DEFAULT_TASK_TIMEOUT):
     """A map() for build.write_tiles that uses a pool (returns (map_fn, closer))."""
     if workers <= 1:
         return map, (lambda ok=True: None)
-    pool = mp.get_context("spawn").Pool(workers, maxtasksperchild=50, initializer=_init_worker)
+    pool = SafePool(workers, initializer=_init_worker, maxtasksperchild=50, timeout=timeout)
 
     def close(ok=True):
         if ok:
             pool.close()
         else:
             pool.terminate()
-        pool.join()
-    return (lambda fn, jobs: pool.imap_unordered(fn, jobs)), close
+    return (lambda fn, jobs: pool.imap_unordered(fn, jobs, _tiles_failed)), close
 
 
 def _segment_jobs(rows, out_dir, limit, force, k_frames, log=C.log_default):
@@ -118,7 +146,8 @@ def _segment_jobs(rows, out_dir, limit, force, k_frames, log=C.log_default):
 
 
 def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None, limit=None, workers=None,
-        frames_per_segment=None, n_clips=60, force=False, single_class=False, log=C.log_default):
+        frames_per_segment=None, n_clips=60, force=False, single_class=False, log=C.log_default,
+        task_timeout=DEFAULT_TASK_TIMEOUT):
     from yolo_export import annotate as AN
     from yolo_export import build as BU
     from yolo_export import clips as CL
@@ -157,10 +186,10 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
             continue
         if step == "annotate":
             pool_run(AN.annotate_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
-                     workers, log, "annotate")
+                     workers, log, "annotate", timeout=task_timeout)
         elif step == "verify":
             pool_run(VF.verify_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
-                     workers, log, "verify")
+                     workers, log, "verify", timeout=task_timeout)
             if "clock" not in steps:
                 for row in rows:                      # refresh the per-experiment events tables
                     ck = CK.load_clock(out_dir, row["alias"])
@@ -175,11 +204,11 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
                     log("  ! clock %s: %s" % (row["alias"], exc))
         elif step == "frames":
             pool_run(FR.frames_segment, _segment_jobs(rows, out_dir, limit, force, frames_per_segment, log),
-                     workers, log, "frames")
+                     workers, log, "frames", timeout=task_timeout)
         elif step == "build":
             b_rows = I.chosen_rows(inv, rig=rig, experiments=experiments) if (rig or experiments) else \
                 [r for r in inv if r.get("chosen")]
-            pmap, close = _pool_map(workers)
+            pmap, close = _pool_map(workers, task_timeout)
             done = False
             try:
                 BU.build(out_dir, b_rows, sel, workers=workers, single_class=single_class, log=log, pool_map=pmap)
@@ -193,7 +222,7 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
                     jobs += CL.clip_jobs(row, out_dir, n_clips, force)
                 except Exception as exc:  # noqa: BLE001
                     log("  ! clips %s: %s" % (row["alias"], exc))
-            pool_run(CL.cut_clip, jobs, workers, log, "clips")
+            pool_run(CL.cut_clip, jobs, workers, log, "clips", timeout=task_timeout)
         elif step == "qa":
             QA.report(out_dir, rows, log)
         elif step == "docs":

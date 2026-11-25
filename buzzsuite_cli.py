@@ -545,7 +545,7 @@ def cmd_yolo(args):
     out = runner.run(args.action, out_dir=args.out, roots=args.root or None, rig=args.rig, aux=args.aux,
                      experiments=args.experiment, limit=args.limit, workers=args.workers,
                      frames_per_segment=args.frames_per_segment, n_clips=args.clips, force=args.force,
-                     single_class=args.single_class, log=_log)
+                     single_class=args.single_class, log=_log, task_timeout=args.task_timeout)
     _log("yolo %s -> %s" % (args.action, out))
     return 0
 
@@ -697,6 +697,10 @@ def build_parser():
     y.add_argument("--force", action="store_true", help="Redo work already done.")
     y.add_argument("--single-class", action="store_true",
                    help="Also write single-class copies of the datasets (yolo/*_1class).")
+    y.add_argument("--task-timeout", type=float, default=1800, metavar="SECONDS",
+                   help="Stop a segment, clip or tile job that runs longer than this and skip it, logging an "
+                        "error that names its file (default 1800). A worker that crashes outright is "
+                        "skipped the same way.")
     y.set_defaults(func=cmd_yolo)
 
     return p

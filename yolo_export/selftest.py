@@ -5,11 +5,13 @@
 
 Synthetic checks: tracker -> video frame alignment (+2 for flying, 0 for resting, the take-off
 duplicate rule), motion classes, take-off / landing frames, the flying-label motion rule, the
-resting-satellite rule, tile <-> full-frame label round trip, split determinism, and the output-folder guard. Exits non-zero on the
+resting-satellite rule, tile <-> full-frame label round trip, split determinism, the output-folder guard,
+and the worker pool skipping a segment whose worker crashes, hangs or raises. Exits non-zero on the
 first failure.
 """
 import os
 import sys
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -202,6 +204,72 @@ def test_splits_and_guard():
     _check(True, "output guard accepts a folder outside the data trees")
 
 
+class _Call(object):
+    """Pickles as a call of fn(*args), made when the pickle is loaded."""
+    def __init__(self, fn, args):
+        self.fn, self.args = fn, args
+
+    def __reduce__(self):
+        return self.fn, self.args
+
+
+def _load_tracking(job):
+    """Worker for test_dead_worker: unpickle the segment's tracking file, like annotate does."""
+    import pickle
+    from yolo_export import runner as RU
+    with open(RU.job_file(job), "rb") as f:
+        pickle.load(f)
+    return job["stem"], "ok", ""
+
+
+def test_dead_worker():
+    """A worker that dies outright on an unreadable pickle (as numpy-2-era pickles do under numpy 1.x,
+    with an access violation), one that hangs and one that raises each fail their own segment,
+    naming its file; the other segments still finish and the run does not hang."""
+    import pickle
+    import shutil
+    import tempfile
+    from yolo_export import runner as RU
+    from yolo_export.safe_pool import describe_exit
+    tmp = tempfile.mkdtemp(prefix="yolo_selftest_")
+    try:
+        exp = os.path.join(tmp, "exp")
+        os.makedirs(os.path.join(exp, "final_tracking_data"))
+        crash_code = -1073741819 if os.name == "nt" else 3          # 0xC0000005, access violation
+        good = pickle.dumps({"objects": {}})
+        content = {"good_a": good, "good_b": good, "good_c": good, "good_d": good,
+                   "crash": pickle.dumps(_Call(os._exit, (crash_code,))),
+                   "truncated": good[:len(good) // 2],
+                   "hang": pickle.dumps(_Call(time.sleep, (120,)))}
+        for stem, data in content.items():
+            with open(os.path.join(exp, "final_tracking_data", C.TRACK_PREFIX + stem), "wb") as f:
+                f.write(data)
+        order = ["good_a", "crash", "good_b", "truncated", "hang", "good_c", "good_d"]
+        jobs = [{"alias": "selftest", "exp_dir": exp, "stem": s} for s in order]
+        lines = []
+        t0 = time.time()
+        res = RU.pool_run(_load_tracking, jobs, 2, lines.append, "selftest", timeout=4)
+        took = time.time() - t0
+        by = {r[0]: r for r in res}
+        _check(sorted(by) == sorted(order), "one result per segment (%d), none lost" % len(res))
+        _check(all(by[s][1] == "ok" for s in ("good_a", "good_b", "good_c", "good_d")),
+               "segments after the crash still finish")
+        crash = by["crash"]
+        _check(crash[1] == "error" and "worker process died" in crash[2]
+               and C.TRACK_PREFIX + "crash" in crash[2] and "selftest" in crash[2],
+               "a worker that dies outright fails only its segment, naming the file (%s)" % crash[2].split(";")[0])
+        if os.name == "nt":
+            _check("access violation" in crash[2], "  ... and says it was an access violation")
+        _check(by["hang"][1] == "error" and "timed out" in by["hang"][2], "a hanging segment is stopped at the timeout")
+        _check(by["truncated"][1] == "error" and C.TRACK_PREFIX + "truncated" in by["truncated"][2],
+               "an unpickling error fails only its segment")
+        _check(took < 60, "the run did not hang (%.0f s)" % took)
+        _check(any("! crash:" in ln for ln in lines), "the crash is in the log")
+        _check(describe_exit(3221225477) == "exit code 0xC0000005 (access violation)", "exit codes are readable")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_dataset(out_dir):
     """YOLO format checks of a written dataset: pairs, 5 normalised columns, classes."""
     for variant in ("stack", "single"):
@@ -238,6 +306,7 @@ def main(argv):
     test_resting_satellites()
     test_tiles()
     test_splits_and_guard()
+    test_dead_worker()
     if len(argv) > 1:
         check_dataset(argv[1])
     print("all checks passed")
