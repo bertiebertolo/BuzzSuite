@@ -73,7 +73,7 @@ DEFINITIONS = {
         "walk_bout_min_frames": 25,
         "flyer_min_points": 10,                    # fp_config MIN_FLYER_PTS
         "flyer_mean_step_cw": 0.005,               # fp_config FLYER_STEP 4 px/frame at 780 px
-        "link_max_gap_frames": 25,                 # fp_links_extract MAXGAP
+        "link_max_gap_frames": 25,                 # fp_links_extract MAXGAP, in tracker-index frames
         "zone_radius_cw": 0.10,                    # fp_config R_FRACS[R_MAIN]
         "swarm_radius_cw": 0.16,                   # BuzzSwarm SWARM_RADIUS_PX 100 px at Flare scale
         "swarm_min_flyers": 3,
@@ -434,6 +434,8 @@ def read_json(path, default=None):
 
 
 def _json_default(o):
+    if isinstance(o, np.bool_):
+        return bool(o)
     if isinstance(o, (np.integer,)):
         return int(o)
     if isinstance(o, (np.floating,)):

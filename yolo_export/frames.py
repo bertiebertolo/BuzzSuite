@@ -203,6 +203,10 @@ def frames_segment(job):
         frames, kind = choose_frames(P, T, int(job["k_frames"]), defs, C.seed_for(job["alias"] + "/" + job["stem"]))
         ref, thr, ref_kind = load_reference(job["exp_dir"], job["stem"], job.get("tracking") or {}, defs)
         raw_keys = TR.keys_of(raw["tid"], raw["idx"])          # raw arrays are sorted by (tid, idx)
+        if len(raw_keys) > 1 and not (raw_keys[1:] > raw_keys[:-1]).all():
+            o = np.argsort(raw_keys, kind="stable")
+            raw = {k: (v[o] if isinstance(v, np.ndarray) else v) for k, v in raw.items()}
+            raw_keys = raw_keys[o]
         order_vf = np.argsort(P["vf"], kind="stable")
         vf_sorted = P["vf"][order_vf]
         gap = int(defs["alignment"]["gap_fill_frames"])

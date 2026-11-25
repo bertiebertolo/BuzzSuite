@@ -442,7 +442,8 @@ def _data_yaml(path, root, names, variant):
     lines = ["# BuzzWatch live detector - YOLO tile dataset (%s). See ../../README.md and" % variant,
              "# ../../docs/definitions.json. Images: %s." % chan,
              "# Train with hsv_h=0 hsv_s=0 (channels are gray / time, not colour).",
-             "path: %s" % root.replace("\\", "/"), "train: images/train", "val: images/val", "test: images/test",
+             "# No 'path:' on purpose: Ultralytics then uses this file's folder, so the dataset can move.",
+             "train: images/train", "val: images/val", "test: images/test",
              "names:"]
     lines += ["  %d: %s" % (k, v) for k, v in sorted(names.items())]
     with open(path, "w") as f:
@@ -492,7 +493,10 @@ def build(out_dir, rows, selection, workers=None, single_class=False, log=C.log_
         on, edge, phase, tag = CK.flags(times, windows, sched, defs)
         F = F.assign(time=times, stim_on=on, stim_edge=edge, light_phase=phase, day_tag=tag,
                      role=row.get("role", ""))
-        test_days = (selection.get("test_days") or {}).get(alias) or default_test_days(row, clock)
+        td = (selection.get("test_days") or {}).get(alias)
+        if td is not None and not isinstance(td, (list, tuple)):
+            td = [td]
+        test_days = [str(d) for d in td] if td else default_test_days(row, clock)
         seg_mid = {}
         for stem, sess, k, n in F[["stem", "session", "k", "n_frames"]].drop_duplicates("stem").itertuples(index=False):
             seg_mid[stem] = str(CK.frame_times(clock, sess, k, [int(n) // 2])[0].astype("datetime64[D]"))
@@ -530,6 +534,10 @@ def build(out_dir, rows, selection, workers=None, single_class=False, log=C.log_
             "splits": F.split.value_counts().to_dict()}
     if not all_frames:
         raise RuntimeError("no frames meta found -- run the 'frames' action first")
+    Fall = pd.concat(all_frames, ignore_index=True)
+    multi = Fall.groupby("stem").split.nunique()
+    if len(multi) and multi.max() > 1:
+        raise RuntimeError("segments in two splits (copies across experiments?): %s" % list(multi[multi > 1].index[:5]))
     T = pd.DataFrame(all_tiles)
     # keep at most max_empty_frac empty tiles per split
     T["selected"] = T.decision == "accept"
@@ -549,7 +557,6 @@ def build(out_dir, rows, selection, workers=None, single_class=False, log=C.log_
         for sp in ("train", "val", "test"):
             os.makedirs(os.path.join(tmp[v], "images", sp))
             os.makedirs(os.path.join(tmp[v], "labels", sp))
-    Fall = pd.concat(all_frames, ignore_index=True)
     sel = T[T.selected]
     png_of = dict(zip(Fall.frame_id, Fall.png))
     stem_of = dict(zip(Fall.frame_id, Fall.stem))

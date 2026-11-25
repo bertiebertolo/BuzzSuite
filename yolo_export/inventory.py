@@ -35,7 +35,7 @@ stim_windows: {}
 
 # Borrow another experiment's custom_zones.json (alias: other_alias). Without an entry, an
 # experiment with no zones borrows them from a chosen experiment on the same rig whose cage
-# corners are within 15 px, and that is flagged in inventory.csv (zones_source).
+# corners are within 3% of the cage width, and that is flagged in inventory.csv (zones_source).
 zones_from: {}
 
 # Recording-clock rate per rig when the minute-40 burst fit is not possible (fp_clock fallback).
@@ -243,10 +243,12 @@ def build_inventory(out_dir, roots, log=C.log_default):
     # ---- one analysis per recording (or flag several cages in one video)
     by_video = {}
     for r in rows:
-        if r["video_dir"] and r["n_both"] and r["cage_points"] and not r["reason"]:
+        has_cage = len(json.loads(r["cage_points"] or "[]")) >= 3
+        if r["video_dir"] and r["n_both"] and has_cage and not r["reason"]:
             by_video.setdefault(os.path.normcase(r["video_dir"]), []).append(r)
         elif not r["reason"]:
-            r["reason"] = "no tracked segments with video" if r["n_tracked"] else "not tracked"
+            r["reason"] = ("no cage border drawn" if r["n_both"] and not has_cage else
+                           "no tracked segments with video" if r["n_tracked"] else "not tracked")
     for group in by_video.values():
         cages = [np.asarray(json.loads(r["cage_points"]), float) for r in group]
         tol = 0.25 * max(float(np.nanmax([r["cage_width_px"] for r in group]) or 1.0), 1.0)

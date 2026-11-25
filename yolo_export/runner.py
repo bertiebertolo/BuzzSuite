@@ -54,6 +54,7 @@ def pool_run(fn, jobs, workers, log, label):
         it = pool.imap_unordered(fn, jobs)
     else:
         it = map(fn, jobs)
+    ok = False
     try:
         for i, r in enumerate(it, 1):
             results.append(r)
@@ -61,9 +62,13 @@ def pool_run(fn, jobs, workers, log, label):
                 log("    ! %s: %s" % (r[0], r[2]))
             if i % 10 == 0 or i == len(jobs):
                 log("    %s %d/%d  (%.0f s)" % (label, i, len(jobs), time.time() - t0))
+        ok = True
     finally:
         if pool is not None:
-            pool.close()
+            if ok:
+                pool.close()
+            else:
+                pool.terminate()          # Ctrl-C / error: stop now, don't wait for queued work
             pool.join()
     n = {}
     for r in results:
@@ -75,9 +80,16 @@ def pool_run(fn, jobs, workers, log, label):
 def _pool_map(workers):
     """A map() for build.write_tiles that uses a pool (returns (map_fn, closer))."""
     if workers <= 1:
-        return map, (lambda: None)
+        return map, (lambda ok=True: None)
     pool = mp.get_context("spawn").Pool(workers, maxtasksperchild=50, initializer=_init_worker)
-    return (lambda fn, jobs: pool.imap_unordered(fn, jobs)), (lambda: (pool.close(), pool.join()))
+
+    def close(ok=True):
+        if ok:
+            pool.close()
+        else:
+            pool.terminate()
+        pool.join()
+    return (lambda fn, jobs: pool.imap_unordered(fn, jobs)), close
 
 
 def _segment_jobs(rows, out_dir, limit, force, k_frames, log=C.log_default):
@@ -168,10 +180,12 @@ def run(action, out_dir=None, roots=None, rig=None, aux=False, experiments=None,
             b_rows = I.chosen_rows(inv, rig=rig, experiments=experiments) if (rig or experiments) else \
                 [r for r in inv if r.get("chosen")]
             pmap, close = _pool_map(workers)
+            done = False
             try:
                 BU.build(out_dir, b_rows, sel, workers=workers, single_class=single_class, log=log, pool_map=pmap)
+                done = True
             finally:
-                close()
+                close(done)
         elif step == "clips":
             jobs = []
             for row in rows:

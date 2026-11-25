@@ -158,7 +158,8 @@ def schedule_of(row):
     import ld_dd
     try:
         sch = ld_dd.load_schedule(row["exp_dir"])
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print("  ! %s: ld_dd_schedule.json unreadable (%s); default night hours used" % (row["alias"], exc), flush=True)
         sch = {}
     ns = float(sch.get("night_start_hour", ld_dd.DEFAULT_NIGHT[0]))
     ne = float(sch.get("night_end_hour", ld_dd.DEFAULT_NIGHT[1]))
