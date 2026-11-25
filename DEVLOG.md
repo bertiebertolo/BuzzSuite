@@ -172,6 +172,12 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   `live_preprocess.py` (exporter tiling verbatim; check reproduces the 1080p training tile origins), stabilize.py,
   exporter copies, pi_check (8 tiles + emulator output), clip_check (10 s 1080p clip + PyTorch-through-live-code boxes,
   32.9 / frame = the demo). Training cage widths: ~1,165 px (1080p), ~770 px (720p); all 25 fps.
+- 11-25: Pi recorder live with v14 (`~/buzzwatch_recorder`, Camera Module 3 NoIR 2304x1296 @ 25 fps, full-range gray,
+  kit tiler: tx [520, 1030] ty [141, 635], video crop 1150x1134, ~160 MB/h). Pi checks: pi_check 115/115 boxes,
+  clip_check F1 0.971/0.970. Empty cage (`Penzance_EmptyCage_20261125`, from 14:45): 0 false flyers, ~1.0 false
+  resting box per frame, all at one fixed dark mark (1454, 1045 camera px). PC side: `G:\Penzance_Live` (one folder per
+  experiment, raw/ + labelled/ + manifest.json) filled by `_tools/pull_pi.py --loop 600` (finished segments only,
+  md5-checked against the Pi's segments.txt).
 
 ## 2026-11-25 — v1.0.0: hang, border, radius and install fixes; feeder tools merged; clean-up
 
