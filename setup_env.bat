@@ -1,6 +1,7 @@
 @echo off
-rem Create buzzsuite_env on a new Windows PC, matching the machine tracking was validated on, then
-rem run check_install.py. Run it from "Anaconda Prompt" (Start menu), in this folder.
+rem Create buzzsuite_env on a new Windows PC, matching the machine tracking was validated on, run
+rem check_install.py, then create buzzphono_env for BuzzPhono. Run it from "Anaconda Prompt"
+rem (Start menu), in this folder. Safe to run again: environments that exist are only checked.
 setlocal
 cd /d "%~dp0"
 
@@ -36,4 +37,21 @@ if errorlevel 1 (
 
 :check
 call conda run -n buzzsuite_env --no-capture-output python check_install.py
+
+rem BuzzPhono runs in its own environment (Python 3.12); BuzzSuite's BuzzPhono tab starts it there.
+call conda env list | findstr /b /c:"buzzphono_env " >nul
+if not errorlevel 1 (
+    echo buzzphono_env already exists - checking it.
+    goto checkphono
+)
+echo Creating buzzphono_env for BuzzPhono. This takes a few minutes.
+call conda env create -f environment-buzzphono.yml
+if errorlevel 1 (
+    echo Creating buzzphono_env failed. The BuzzSuite app works without it, but BuzzPhono will not open.
+    pause
+    exit /b 1
+)
+
+:checkphono
+call conda run -n buzzphono_env --no-capture-output buzzphono --version
 pause

@@ -66,11 +66,34 @@ def buzzphono_command():
             return [cand, "-m", "buzzphono"]
     conda = os.environ.get("CONDA_EXE") or shutil.which("conda")
     if conda:
-        return [conda, "run", "--no-capture-output", "-n", ENV_NAME, "python", "-m", "buzzphono"]
-    raise BuzzPhonoNotFound(
-        "BuzzPhono is not installed: no '%s' conda environment was found.\n"
-        "Install it with: conda env create -f environment-buzzphono.yml\n"
-        "or set BUZZPHONO_PYTHON to its python executable." % ENV_NAME)
+        envs = _conda_envs(conda)
+        if envs is None:  # conda could not list its environments: let `conda run` look for it
+            return [conda, "run", "--no-capture-output", "-n", ENV_NAME, "python", "-m", "buzzphono"]
+        exe = "python.exe" if os.name == "nt" else os.path.join("bin", "python")
+        for prefix in envs:
+            cand = os.path.join(prefix, exe)
+            if os.path.basename(os.path.normpath(prefix)) == ENV_NAME and os.path.isfile(cand):
+                return [cand, "-m", "buzzphono"]
+    raise BuzzPhonoNotFound(NOT_INSTALLED)
+
+
+NOT_INSTALLED = (
+    "BuzzPhono's environment (%s) is not installed on this computer.\n\n"
+    "Install it once: open \"Anaconda Prompt\", go to the BuzzSuite folder and run setup_env.bat "
+    "(or: conda env create -f environment-buzzphono.yml). It takes a few minutes. Then try again.\n\n"
+    "If it is installed somewhere unusual, set BUZZPHONO_PYTHON to its python executable." % ENV_NAME)
+
+
+def _conda_envs(conda):
+    """Every environment folder conda knows (any envs directory), or None if conda cannot say."""
+    try:
+        out = subprocess.run([conda, "env", "list", "--json"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, env=clean_env(), timeout=60, universal_newlines=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        envs = json.loads(out.stdout)["envs"]
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return None
+    return [e for e in envs if isinstance(e, str)] if isinstance(envs, list) else None
 
 
 def clean_env():
