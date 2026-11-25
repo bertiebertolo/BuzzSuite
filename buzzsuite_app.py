@@ -99,7 +99,17 @@ class VideoAnalyzerApp:
         from tkinter import messagebox
         try:
             if isinstance(path, str) and path.lower().endswith('.json'):
-                self.experiment_manager.load_experiment_from_json(path)
+                # load_experiment_from_json keeps settings that are already set (batch workers
+                # preload them), so clear the previous experiment's first: otherwise a second
+                # experiment opened in this session would get the first one's cage border and settings
+                em = self.experiment_manager
+                previous, em.settings = em.settings, None
+                try:
+                    em.load_experiment_from_json(path)
+                except Exception:
+                    if em.settings is None:
+                        em.settings = previous      # the previous experiment stays loaded
+                    raise
             else:
                 self.experiment_manager.load_experiment(path)
             self.ui_manager.update_ui_after_loading_experiment()
