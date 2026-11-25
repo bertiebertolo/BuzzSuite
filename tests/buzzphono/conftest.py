@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,22 @@ settings.register_profile("dev", deadline=None, max_examples=200)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 TESTS_DIR = Path(__file__).resolve().parent
+
+
+@pytest.fixture(autouse=True)
+def _keep_main_module():
+    """Put sys.modules['__main__'] back after every test.
+
+    Streamlit's script runner (and so AppTest) makes the page it runs the process's __main__ and
+    leaves it there. Every spawn worker pool started later in the same process then re-runs that
+    page in each worker as it starts (multiprocessing re-imports __main__); a page that raises
+    outside a real Streamlit session (2_Calibrate.py does) kills them all, and every later
+    multi-worker ingest failed with "A worker process stopped abruptly". The real app is not
+    affected: its analyses run in a separate `buzzphono analyse` process."""
+    main = sys.modules.get("__main__")
+    yield
+    if main is not None and sys.modules.get("__main__") is not main:
+        sys.modules["__main__"] = main
 
 
 def _local_paths() -> dict[str, str]:
