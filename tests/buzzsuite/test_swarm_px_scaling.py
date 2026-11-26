@@ -1,6 +1,7 @@
-"""BuzzSwarm's pixel settings follow the chosen swarm-zone radius: with no radius (the default
-100 px) they are exactly the old constants; with a camera that sees the cage at twice the scale and
-a swarm zone set twice as large, every scale-free metric comes out the same."""
+"""BuzzSwarm's pixel settings follow the camera's resolution (frame width / 1280): on the old 720p
+camera they are exactly the old constants; with a camera that sees the cage at twice the scale (and a
+swarm zone twice as large), every scale-free metric comes out the same. A chosen swarm radius changes
+only the swarm zone."""
 import math
 
 import numpy as np
@@ -16,20 +17,20 @@ DATE = "2026-07-04"
 WINDOW = "16:00-16:30"
 
 
-def test_default_radius_gives_the_old_constants():
-    for radius in (None, 0, ca.SWARM_RADIUS_PX, float(ca.SWARM_RADIUS_PX)):
-        px = ca.px_settings(radius)
+def test_old_camera_gives_the_old_constants():
+    for scale in (None, 0, 1, 1.0):
+        px = ca.px_settings(scale)
         assert px == {"scale": 1.0, "central_radius_px": 150, "core_px": 60, "shape_ring_px": 20,
-                      "shape_max_px": 240, "heat_cell_px": 20, "fly_px_frame": 3.0}, (radius, px)
-    assert ca.px_settings() == ca.px_settings(100)
+                      "shape_max_px": 240, "heat_cell_px": 20, "fly_px_frame": 3.0}, (scale, px)
+    assert ca.px_settings() == ca.px_settings(1.0)
 
 
-def test_settings_scale_with_the_radius():
-    px = ca.px_settings(200)
+def test_settings_scale_with_the_camera():
+    px = ca.px_settings(2.0)
     assert px["scale"] == 2.0
     assert (px["central_radius_px"], px["core_px"], px["heat_cell_px"], px["fly_px_frame"]) == (300, 120, 40, 6.0)
     assert (px["shape_ring_px"], px["shape_max_px"]) == (40, 480)
-    px = ca.px_settings(137)
+    px = ca.px_settings(1.37)
     assert math.isclose(px["central_radius_px"], 150 * 1.37) and math.isclose(px["fly_px_frame"], 3 * 1.37)
     for bad in (-50, float("nan"), float("inf")):
         try:
@@ -58,7 +59,7 @@ def test_default_geometry_is_unchanged():
     assert geo["areas"]["core"] == float(np.mean(r < 60))
     assert np.array_equal(geo["areas"]["rings"], np.histogram(r, np.arange(0, 260, 20))[0] / 400_000.0)
     # odd scales still give a whole number of rings and heatmap cells
-    g = ca.geometry_from(CENTROID, SQUARE, 137)
+    g = ca.geometry_from(CENTROID, SQUARE, 137, camera_scale=1.37)
     assert len(g["areas"]["ring_edges"]) == 13 and math.isclose(g["areas"]["ring_edges"][-1], 240 * 1.37)
     assert np.allclose(np.diff(g["heat_edges"]), 20 * 1.37)
 
@@ -94,7 +95,7 @@ def _synthetic_day(scale=1.0, seed=3):
 def _window_row(scale, radius):
     day = _synthetic_day(scale)
     poly = np.asarray(CENTROID) * scale + (np.asarray(SQUARE) - np.asarray(CENTROID)) * scale
-    geo = ca.geometry_from(np.asarray(CENTROID) * scale, poly, radius)
+    geo = ca.geometry_from(np.asarray(CENTROID) * scale, poly, radius, camera_scale=scale)
     out = ca.day_metrics(day, geo, bin_minutes=30, windows=[WINDOW])
     return out, geo
 
@@ -127,7 +128,7 @@ def test_scale_free_metrics_do_not_depend_on_the_camera():
 def test_unscaled_settings_would_differ():
     """Guard for the test above: with the old fixed settings the 2x camera gave other numbers."""
     b_fixed = ca.day_metrics(_synthetic_day(2.0), dict(ca.geometry_from((800.0, 800.0),
-                             np.asarray(SQUARE) * 2.0, 200), px=ca.px_settings(100),
+                             np.asarray(SQUARE) * 2.0, 200), px=ca.px_settings(1.0),
                              areas=ca._area_shares(np.asarray(SQUARE) * 2.0, (800.0, 800.0), 200.0)),
                              bin_minutes=30, windows=[WINDOW])["windows"][0]
     a, _ = _window_row(1.0, 100)
@@ -141,7 +142,7 @@ def test_geometry_json_records_the_settings_used():
     import shutil
     d = tempfile.mkdtemp(prefix="bs_px_")
     try:
-        geo = ca.geometry_from(CENTROID, SQUARE, 150)
+        geo = ca.geometry_from(CENTROID, SQUARE, 150, camera_scale=1.5)
         payload = ca._write_geometry(d, "exp", "grp", geo)
         with open(os.path.join(d, "geometry.json")) as f:
             on_disk = json.load(f)
@@ -168,3 +169,53 @@ def test_heatmap_plot_uses_the_experiments_cell_size():
     hm1 = pd.DataFrame(a["heatmap"]).assign(experiment="old", group="old", date=DATE)
     fig1, table1 = cp.heatmaps(hm1, {"old": {"centroid": list(CENTROID), "polygon": SQUARE}})
     assert sorted(set(table1.x_px.round(6))) == sorted(set(hm1.x_px.round(6)))
+
+
+def _frame_exp(root, width, height, where="background.png"):
+    """An experiment folder with a cage border and a camera frame of this size."""
+    import json
+    import os
+    from PIL import Image
+    d = os.path.join(root, "exp_%d" % width)
+    os.makedirs(os.path.join(d, "individual_images"))
+    with open(os.path.join(d, "buzzwatch_track_settings.yml"), "w") as f:
+        f.write("cage_border_points: %s\n" % json.dumps(SQUARE))
+    if where:
+        Image.new("RGB", (width, height)).save(os.path.join(d, where))
+    return d
+
+
+def test_camera_scale_comes_from_the_frame_width():
+    import tempfile
+    import shutil
+    root = tempfile.mkdtemp(prefix="bs_cam_")
+    try:
+        assert ca.camera_scale(_frame_exp(root, 1280, 720)) == (1.0, 1280)
+        assert ca.camera_scale(_frame_exp(root, 1920, 1080, "individual_images/seg_00001.png")) == (1.5, 1920)
+        assert ca.camera_scale(_frame_exp(root, 640, 480, None)) == (1.0, None)     # nothing to measure
+        assert ca.default_swarm_radius(_frame_exp(root, 2304, 1296)) == 180.0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_chosen_radius_changes_only_the_swarm_zone():
+    import tempfile
+    import shutil
+    root = tempfile.mkdtemp(prefix="bs_cam_")
+    try:
+        old_cam, new_cam = _frame_exp(root, 1280, 720), _frame_exp(root, 1920, 1080)
+        g = ca.experiment_geometry(old_cam, 150)                 # bigger zone, old camera
+        assert g["swarm_radius"] == 150 and g["px"] == ca.px_settings(1.0) and g["frame_width_px"] == 1280
+        g = ca.experiment_geometry(new_cam)                      # no zone chosen, 1080p camera
+        assert g["swarm_radius"] == 150 and g["px"]["fly_px_frame"] == 4.5 and g["px"]["heat_cell_px"] == 30
+        g = ca.experiment_geometry(new_cam, 120)                 # chosen zone, 1080p camera
+        assert g["swarm_radius"] == 120 and g["px"]["central_radius_px"] == 225
+        # the metrics of the old camera with a 150 px zone: only the swarm numbers change
+        day = _synthetic_day(1.0)
+        a = ca.day_metrics(day, ca.geometry_from(CENTROID, SQUARE, 100), 30, [WINDOW])["windows"][0]
+        b = ca.day_metrics(day, ca.experiment_geometry(old_cam, 150), 30, [WINDOW])["windows"][0]
+        for k in ("n_flying", "central_enrichment", "core_density", "shape_index", "speed_px_s"):
+            assert a[k] == b[k], k
+        assert b["swarm_mean"] > a["swarm_mean"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

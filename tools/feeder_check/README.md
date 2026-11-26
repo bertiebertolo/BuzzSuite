@@ -38,8 +38,8 @@ full day; pass `--days 2026-07-05 2026-07-06` to choose. `--ring LO HI` sets the
   anything under ~10% of that looks black. These figures use density relative to the cage average
   on a log scale.
 - **Filters.** Only points moving at >= the experiment's real-flight threshold count as real flight
-  (3 px/frame = 75 px/s at 25 fps at the default 100 px swarm radius; it scales with the radius, as
-  in BuzzSwarm).
+  (3 px/frame = 75 px/s at 25 fps on the old 720p camera; it scales with the camera's frame width,
+  as in BuzzSwarm).
   On the walls most moving-tracker detections are mosquitoes walking or landing, so
   the filters remove most wall detections everywhere, not just at the zones. The density-artifact
   filter removes well under 1%.

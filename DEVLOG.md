@@ -235,3 +235,11 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   central_enrichment -25..-31%, speed +15..+19%. So the plots of an experiment with a saved swarm zone
   changed by design (faa4916); the tracking and the day caches did not. Whether the speed threshold
   should follow the swarm zone (camera scale) or stay at 3 px/frame is a question for the user.
+- Decision (user, same day): pixel settings follow the camera's resolution, not the swarm zone.
+  `camera_scale(exp)` = frame width of `cage_reference_image` / 1280 (`REFERENCE_WIDTH_PX`; (1.0, None)
+  without a frame); `px_settings(camera_scale)`; `experiment_geometry(exp, radius=None)` uses the
+  chosen radius for the swarm zone only, else `default_swarm_radius` = 100 x scale. The picker starts
+  at and resets to that default; the tab passes None when no radius is saved. feeder_check's
+  threshold follows the camera too. Check: on a 720p frame the current code and a08ec1e give
+  identical tables for 60, 100 and 150 px zones. Width rather than height: for 4:3 sensor modes the
+  two differ; width is what the option the user chose described (1280 px wide = the old camera).

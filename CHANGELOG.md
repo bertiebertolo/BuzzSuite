@@ -5,6 +5,15 @@ day-by-day working notes.
 
 ## [Unreleased]
 
+- **BuzzSwarm: pixel settings follow the camera, not the swarm zone.** In 1.0.0 the real-flight
+  speed cut-off, the central and core zones, the shape rings and the heatmap cells grew with a
+  chosen swarm radius, so choosing a bigger zone also changed who counted as flying (e.g. a 150 px
+  zone: mosquitoes in flight about -20%). They now scale with the camera's frame width, read
+  from the experiment's camera frame (1280 px, the old 720p camera = unchanged; 1920 px = 1.5x),
+  and a chosen radius changes only the swarm zone. Without a chosen radius the zone is 100 px
+  scaled the same way (150 px at 1920 x 1080). On the old camera every result is again identical
+  to before 1.0.0's change, whatever the zone. `geometry.json` records `frame_width_px`.
+
 - **BuzzSwarm: fruitless-paper style figures** (`buzzswarm/flight_maps.py`), from every flight of
   2 s or more in each clock window (the engine's strict flights, as in the paper; independent of
   the swarm zone):

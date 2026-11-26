@@ -1,7 +1,8 @@
 """Swarm-zone picker for the Swarming tab: shows a camera frame of the experiment with its cage
 outline and lets the user set the swarm-zone radius (pixels) with a slider, a number box or by
-dragging on the image. Different cameras need different radii: 100 px suits the old 720p camera,
-a higher-resolution camera (e.g. Camera Module 3) needs a larger one for the same physical zone.
+dragging on the image. Without a chosen radius the zone is 100 px on the old 720p camera, scaled with
+the camera's frame width (clock_analysis.default_swarm_radius: 150 px at 1920 x 1080); the dashed
+circle shows that default. The radius changes only the swarm zone.
 
 The radius is saved per experiment (clock_analysis.save_swarm_radius) and used by the next
 Run analysis. Day caches do not depend on it, so a rerun only recomputes the metrics.
@@ -30,6 +31,7 @@ class SwarmZoneDialog:
         self.centroid = (float(centroid[0]), float(centroid[1]))
         self.polygon = np.asarray(polygon, dtype=float)
         self._r_inside = self._inside_distances()
+        self.default_radius = int(round(ca.default_swarm_radius(experiment_dir)))
         dists = np.hypot(self.polygon[:, 0] - self.centroid[0], self.polygon[:, 1] - self.centroid[1])
         self.max_radius = int(np.ceil(dists.max()))
 
@@ -41,7 +43,7 @@ class SwarmZoneDialog:
         self._scale = 1.0
         self._build_canvas()
 
-        start = int(round(radius_px)) if radius_px else OLD_DEFAULT_PX
+        start = int(round(radius_px)) if radius_px else self.default_radius
         self.radius_var = tk.IntVar(value=max(1, min(start, self.max_radius)))
         self._build_controls()
         self.radius_var.trace_add('write', lambda *_: self._redraw_zone())
@@ -106,7 +108,7 @@ class SwarmZoneDialog:
         cx, cy = self.centroid[0] * s, self.centroid[1] * s
         self.canvas.create_line(cx - 8, cy, cx + 8, cy, fill="yellow", width=2)
         self.canvas.create_line(cx, cy - 8, cx, cy + 8, fill="yellow", width=2)
-        r_old = OLD_DEFAULT_PX * s
+        r_old = self.default_radius * s
         self.canvas.create_oval(cx - r_old, cy - r_old, cx + r_old, cy + r_old, outline="gray70",
                                 dash=(4, 4), width=1)
         self.canvas.bind("<Button-1>", self._on_drag)
@@ -124,16 +126,17 @@ class SwarmZoneDialog:
         tk.Label(self.top, textvariable=self.info_var, justify="left", anchor="w").pack(
             side=tk.TOP, fill=tk.X, padx=8)
         tk.Label(self.top, fg="gray", justify="left", anchor="w", wraplength=MAX_CANVAS_W,
-                 text="Drag on the image or use the slider. Red = swarm zone, dashed grey = 100 px "
-                      "(the old camera's default), yellow = cage outline and centre. Saved for this "
+                 text="Drag on the image or use the slider. Red = swarm zone, dashed grey = the default "
+                      f"for this camera ({self.default_radius} px), yellow = cage outline and centre. "
+                      "Saved for this "
                       "experiment; click Run analysis afterwards (cached days rerun in seconds)."
                  ).pack(side=tk.TOP, fill=tk.X, padx=8, pady=(2, 4))
         buttons = tk.Frame(self.top)
         buttons.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 8))
         tk.Button(buttons, text="Save", width=10, command=self._on_save).pack(side=tk.RIGHT)
         tk.Button(buttons, text="Cancel", width=10, command=self.top.destroy).pack(side=tk.RIGHT, padx=(0, 6))
-        tk.Button(buttons, text="Reset to 100 px",
-                  command=lambda: self.radius_var.set(min(OLD_DEFAULT_PX, self.max_radius))).pack(side=tk.LEFT)
+        tk.Button(buttons, text=f"Reset to default ({self.default_radius} px)",
+                  command=lambda: self.radius_var.set(min(self.default_radius, self.max_radius))).pack(side=tk.LEFT)
 
     def _radius(self):
         try:

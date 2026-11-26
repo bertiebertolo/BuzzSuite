@@ -3,7 +3,7 @@
 
   blue    kept as real flight (what the BuzzSwarm heatmap plots)
   orange  removed: too slow (smoothed speed below the experiment's real-flight
-          threshold: 3 px/frame = 75 px/s at 25 fps at the default 100 px swarm radius, scaled with it)
+          threshold: 3 px/frame = 75 px/s at 25 fps on the old 720p camera, scaled with the frame width)
   purple  removed: short or jittery piece (step split / < FLIGHT_MIN_FRAMES / average-speed bounds)
   grey    resting tracker (state 0)
 Zones from custom_zones.json are outlined; the corner box shows the timestamp and per-frame counts.

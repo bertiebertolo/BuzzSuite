@@ -143,9 +143,10 @@ The full click-by-click version is in [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
 Needs a tracked experiment with a cage border (BuzzWatch steps 1-4).
 
 1. **3 · Plotting → Swarming (Aggregation):** **Add experiment**.
-2. **Swarm zone…** to set the swarm zone's radius on a picture of the cage (100 px suits the old
-   720p camera; a higher-resolution camera needs more). The central and core zones, heatmap cells
-   and the flight-speed threshold scale with it. Skip this to keep the 100 px default.
+2. **Swarm zone…** to set the swarm zone's radius on a picture of the cage. Skip this to keep the
+   default: 100 px on the old 720p camera, scaled with the camera's resolution (150 px at 1920 x
+   1080). The radius changes only the swarm zone; the central and core zones, heatmap cells and the
+   flight-speed threshold follow the camera's resolution (frame width / 1280).
 3. Tick the days, keep the default clock windows (or add your own), then **Run analysis**.
    **Redraw plots** changes the plots without re-reading the tracking. Plots and CSVs go to the
    experiment's `plots/buzzswarm/`.

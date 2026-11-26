@@ -191,8 +191,9 @@ class BuzzswarmTabManager:
         zone_btn = tk.Button(list_frame, text="Swarm zone…", command=self._on_swarm_zone_clicked)
         zone_btn.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 2))
         add_tooltip(zone_btn, "Set the swarm-zone radius (px) for the selected experiment on a "
-                    "picture of its cage. 100 px suits the old camera; a higher-resolution camera "
-                    "needs a larger radius. Saved per experiment.")
+                    "picture of its cage. Without one, the zone is 100 px on the old 720p camera, "
+                    "scaled with the camera's resolution. Saved per experiment; it changes only the "
+                    "swarm zone.")
         tk.Button(list_frame, text="Remove selected", command=self._on_remove_clicked).pack(
             side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
 
@@ -479,7 +480,7 @@ class BuzzswarmTabManager:
                  'night_start': int(schedule.get('night_start_hour', ld_dd.DEFAULT_NIGHT[0])),
                  'night_end': int(schedule.get('night_end_hour', ld_dd.DEFAULT_NIGHT[1])),
                  'schedule': schedule,
-                 'swarm_radius': ca.load_swarm_radius(folder) or ca.SWARM_RADIUS_PX}
+                 'swarm_radius': ca.load_swarm_radius(folder)}      # None: the camera's default
         self._sync_date_widgets_to_entry()
         self.entries.append(entry)
         self._refresh_listbox()
