@@ -11,7 +11,9 @@ to one folder and can be browsed on the right.
 Outputs:
   - per experiment: CSVs + day caches in {exp}/plots/buzzswarm/ (day_cache/ holds ~150 MB a day);
   - figures: {exp}/plots/buzzswarm/figures/ for one experiment, or a package-level
-    plots/buzzswarm_comparison/{GroupA}__{GroupB}/ when several are compared.
+    plots/buzzswarm_comparison/{GroupA}__{GroupB}/ when several are compared. The
+    fruitless-paper style heatmaps (bins and colour chosen here), flight paths (figures/flights/)
+    and "Make GIFs" (figures/gifs/) come from buzzswarm/flight_maps.py, drawn from the day caches.
 Each experiment's day selection and night hours are saved on Run in its ld_dd_schedule.json
 (ld_dd.BUZZSWARM_DAYS_KEY; the night hours are shared with the Activity tab, the day selection
 is not). Windows / bin / view / metrics persist in config.json under 'buzzswarm_view'.
@@ -23,6 +25,7 @@ is shown), on the main thread, so the app cold-starts fast.
 """
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -40,11 +43,14 @@ _PLOT_LABELS = {
     'swarm_timecourse': 'Swarm size around lights on / off',
     'swarm_size_distribution': 'How often each swarm size occurs',
     'swarm_vs_flying': 'Swarm size at the same number flying',
-    'heatmaps': 'Heatmaps of flight position',
+    'heatmaps': 'Heatmap cells: share of real flight',
+    'heatmaps_paper': 'Heatmaps, paper style (every flight >= 2 s)',
     'centre_profile': 'Flight density vs distance from the centre',
     'window_summary': 'All metrics per clock window',
 }
 _MODES = (('overlay', 'Overlay'), ('individual', 'Individual'), ('continuous', 'Continuous'))
+_FLIGHTS_RE = re.compile(r'^flights_(.+)_(\d{4}-\d{2}-\d{2})$')
+_WINDOW_FILE_RE = re.compile(r'^(?:top(\d+)_)?(.+)_(\d{4}-\d{2}-\d{2})_(\d\d)(\d\d)-(\d\d)(\d\d)$')
 
 
 def _engine():
@@ -54,10 +60,23 @@ def _engine():
     return ca, cp
 
 
+def _flight_maps():
+    from buzzswarm import flight_maps as fm
+    return fm
+
+
 def _plot_label(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     if stem in _PLOT_LABELS:
         return _PLOT_LABELS[stem]
+    m = _FLIGHTS_RE.match(stem)
+    if m:
+        return f"Flight paths: {m.group(1)} {m.group(2)}"
+    m = _WINDOW_FILE_RE.match(stem)
+    if m:
+        top, alias, date, h0, m0, h1, m1 = m.groups()
+        what = f"Top {top} flights" if top else "GIF"
+        return f"{what}: {alias} {date} {h0}:{m0}-{h1}:{m1}"
     if stem.startswith('timecourse_') and '_' in stem[len('timecourse_'):]:
         metric, mode = stem[len('timecourse_'):].rsplit('_', 1)
         _ca, cp = _engine()
@@ -242,6 +261,44 @@ class BuzzswarmTabManager:
         self._saved_metrics = saved.get('metrics')
         controls.bind("<Map>", lambda e: self._ensure_engine_widgets(), add="+")
 
+        # ---- Heatmaps, flight paths, GIFs (fruitless-paper style, from the day caches) ----
+        fm_frame = tk.LabelFrame(controls, text="Heatmaps, flight paths and GIFs")
+        fm_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
+        row = tk.Frame(fm_frame); row.pack(fill=tk.X, padx=4, pady=(4, 2))
+        tk.Label(row, text="Heatmap bins:").pack(side=tk.LEFT)
+        self.heat_bins_var = tk.StringVar(value=str(saved.get('heat_bins', 1000)))
+        bins_entry = tk.Entry(row, textvariable=self.heat_bins_var, width=6)
+        bins_entry.pack(side=tk.LEFT, padx=(4, 0))
+        add_tooltip(bins_entry, "Bins across the cage for the paper-style heatmaps. The fruitless "
+                    "paper used 1000 (fine, smoothed); fewer bins give coarser blocks, e.g. 50. "
+                    "Redraw plots applies a change.")
+        row = tk.Frame(fm_frame); row.pack(fill=tk.X, padx=4, pady=2)
+        tk.Label(row, text="Colour:").pack(side=tk.LEFT)
+        self.heat_colour_var = tk.StringVar(value=saved.get('heat_colour') or 'group colour')
+        self.heat_colour_combo = ttk.Combobox(row, textvariable=self.heat_colour_var, width=16)
+        self.heat_colour_combo.pack(side=tk.LEFT, padx=(4, 0))
+        add_tooltip(self.heat_colour_combo, "Group colour = white to the group's colour, as in the "
+                    "fruitless paper. Or a colour map: pick one or type any matplotlib name (add _r "
+                    "to reverse it, e.g. Greys_r). A colour map is used for the grid heatmaps too.")
+        self.flight_paths_var = tk.BooleanVar(value=bool(saved.get('flight_paths', True)))
+        paths_check = tk.Checkbutton(fm_frame, text="Flight paths and the 30 longest flights",
+                                     variable=self.flight_paths_var)
+        paths_check.pack(side=tk.TOP, anchor="w", padx=2)
+        add_tooltip(paths_check, "For every ticked day: all flights of 2 s or more in each clock "
+                    "window, and the 30 longest one by one (as in the fruitless paper).")
+        row = tk.Frame(fm_frame); row.pack(fill=tk.X, padx=4, pady=(2, 4))
+        tk.Label(row, text="GIF speed-up:").pack(side=tk.LEFT)
+        self.gif_speedup_var = tk.StringVar(value=str(saved.get('gif_speedup', 60)))
+        speed_entry = tk.Entry(row, textvariable=self.gif_speedup_var, width=5)
+        speed_entry.pack(side=tk.LEFT, padx=(4, 0))
+        tk.Label(row, text="x").pack(side=tk.LEFT)
+        add_tooltip(speed_entry, "How much faster than real time the GIFs play: 60 plays a 30-min "
+                    "window in 30 s, 10 in 3 min.")
+        gif_btn = tk.Button(row, text="Make GIFs", command=self._on_gifs_clicked)
+        gif_btn.pack(side=tk.LEFT, padx=(8, 0))
+        add_tooltip(gif_btn, "Replay each clock window (e.g. dawn, midday, dusk) of every ticked day "
+                    "as a GIF. Uses the days Run analysis has cached (about 10 s per GIF).")
+
         run_btn = tk.Button(controls, text="Run analysis", command=self._on_run_clicked)
         run_btn.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
         add_tooltip(run_btn, "Analyse the ticked days of every experiment (days already analysed "
@@ -249,7 +306,8 @@ class BuzzswarmTabManager:
         redraw_btn = tk.Button(controls, text="Redraw plots", command=self._on_redraw_clicked)
         redraw_btn.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
         add_tooltip(redraw_btn, "Redraw from the last results with the current view, metrics, "
-                    "groups and ticked days. No analysis is rerun.")
+                    "groups, ticked days, heatmap bins and colours. No analysis is rerun (the "
+                    "paper-style heatmaps and flight paths are redrawn from the cached days).")
 
         self.status_var = tk.StringVar(value="Add experiments, tick days, then Run analysis.")
         tk.Label(controls, textvariable=self.status_var, fg="blue",
@@ -330,6 +388,7 @@ class BuzzswarmTabManager:
         if self._metric_vars:
             return
         ca, cp = _engine()
+        self.heat_colour_combo['values'] = _flight_maps().COLOURS
         if not self.window_listbox.size():
             self._on_default_windows()
         chosen = self._saved_metrics if isinstance(self._saved_metrics, list) else cp.DEFAULT_METRICS
@@ -702,8 +761,25 @@ class BuzzswarmTabManager:
                 return None
         bin_minutes = self._int_or(self.bin_var, 10, 1, 240)
         self.bin_var.set(str(bin_minutes))
+        fm = _flight_maps()
+        heat_bins = self._int_or(self.heat_bins_var, fm.HEATMAP_BINS, 2, 2000)
+        self.heat_bins_var.set(str(heat_bins))
+        try:
+            heat_colour = fm.check_colour(self.heat_colour_var.get())
+        except ValueError as exc:
+            self.ui_manager.show_error("BuzzSwarm", f"Heatmap colour: {exc}.")
+            return None
+        try:
+            gif_speedup = float(str(self.gif_speedup_var.get()).strip())
+        except ValueError:
+            gif_speedup = fm.GIF_SPEEDUP
+        if not (gif_speedup > 0 and gif_speedup < float('inf')):
+            gif_speedup = fm.GIF_SPEEDUP
+        self.gif_speedup_var.set(f"{gif_speedup:g}")
         view = {'windows': windows, 'bin_minutes': bin_minutes, 'mode': self.mode_var.get(),
-                'metrics': [m for m, v in self._metric_vars.items() if v.get()]}
+                'metrics': [m for m, v in self._metric_vars.items() if v.get()],
+                'heat_bins': heat_bins, 'heat_colour': heat_colour,
+                'flight_paths': bool(self.flight_paths_var.get()), 'gif_speedup': gif_speedup}
         self._save_view(view)
         if skipped:
             self.log(f"BuzzSwarm: no days ticked for {', '.join(skipped)}; leaving them out.")
@@ -754,14 +830,60 @@ class BuzzswarmTabManager:
         view = snap['view']
         n_days = sum(len(x['days']) for x in snap['experiments'])
 
+        fm = _flight_maps()
+
         def work(report, cancel):
+            figures = self._paper_figures(snap, cancel)
             tables = ca.run(snap['experiments'], view['bin_minutes'], view['windows'],
                             cache_root=self._cache_root, out_root=self._out_root,
-                            progress=lambda f, msg: report(0.9 * f, msg), cancel=cancel)
+                            progress=lambda f, msg: report(0.85 * f, msg), cancel=cancel,
+                            on_day=figures.add_day)
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
-                                  progress=lambda f, msg: report(0.9 + 0.1 * f, msg), cancel=cancel)
-            return {'paths': paths, 'dir': snap['fig_dir'], 'missing': []}
+                                  progress=lambda f, msg: report(0.85 + 0.1 * f, msg), cancel=cancel,
+                                  heat_cmap=self._grid_cmap(view, fm))
+            report(0.96, "drawing the paper-style heatmaps")
+            return {'paths': paths + figures.finish(), 'dir': snap['fig_dir'], 'missing': []}
         self._dispatch(work, f"analysis of {n_days} day(s)")
+
+    @staticmethod
+    def _grid_cmap(view, fm):
+        """The grid heatmaps keep magma unless a colour map was chosen."""
+        colour = view.get('heat_colour') or fm.GROUP_COLOUR
+        return 'magma' if colour == fm.GROUP_COLOUR else colour
+
+    def _paper_figures(self, snap, cancel, experiments=None, gifs=False):
+        view = snap['view']
+        return _flight_maps().PaperFigures(
+            experiments or snap['experiments'], view['windows'], snap['fig_dir'],
+            bins=view['heat_bins'], colour=view['heat_colour'], heatmaps=not gifs,
+            flights=view['flight_paths'] and not gifs, gifs=gifs, speedup=view['gif_speedup'],
+            cancel=cancel)
+
+    def _on_gifs_clicked(self):
+        snap = self._snapshot()
+        if snap is None:
+            return
+        ca, _cp = _engine()
+        fm = _flight_maps()
+        missing = [(e, why) for e in snap['entries'] for why in [ca.cage_border_problem(e['folder'])] if why]
+        if missing:
+            self._offer_draw_border(missing, "Make GIFs")
+            return
+        view = snap['view']
+        try:
+            fm.gif_frames(view['windows'], view['gif_speedup'])
+        except ValueError as exc:
+            self.ui_manager.show_error("BuzzSwarm", f"Make GIFs: {exc}.")
+            return
+        n_gifs = sum(len(x['days']) for x in snap['experiments']) * len(view['windows'])
+
+        def work(report, cancel):
+            figures = self._paper_figures(snap, cancel, gifs=True)
+            fm.from_caches(figures, snap['experiments'], cache_root=self._cache_root,
+                           progress=report, cancel=cancel)
+            return {'paths': figures.finish(), 'dir': os.path.join(snap['fig_dir'], 'gifs'),
+                    'missing': []}
+        self._dispatch(work, f"{n_gifs} GIF(s)")
 
     def _on_redraw_clicked(self):
         snap = self._snapshot()
@@ -773,6 +895,8 @@ class BuzzswarmTabManager:
         units = {(x['alias'], d) for x in snap['experiments'] for d in x['days']}
         groups = {x['alias']: x['group'] for x in snap['experiments']}
 
+        fm = _flight_maps()
+
         def work(report, cancel):
             report(0.05, "reading saved results")
             tables = ca.load_outputs(out_dirs, view['bin_minutes'])
@@ -780,7 +904,18 @@ class BuzzswarmTabManager:
             if all(df.empty for k, df in tables.items() if k != 'geometry'):
                 raise RuntimeError("No saved results for these days yet. Click Run analysis first.")
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
-                                  progress=lambda f, msg: report(0.1 + 0.9 * f, msg), cancel=cancel)
+                                  progress=lambda f, msg: report(0.1 + 0.3 * f, msg), cancel=cancel,
+                                  heat_cmap=self._grid_cmap(view, fm))
+            # the paper-style figures come from the day caches, for the days already analysed
+            gone = set(missing)
+            analysed = [dict(x, days=[d for d in x['days'] if (x['alias'], d) not in gone])
+                        for x in snap['experiments']]
+            analysed = [x for x in analysed if x['days']]
+            if analysed:
+                figures = self._paper_figures(snap, cancel, experiments=analysed)
+                fm.from_caches(figures, analysed, cache_root=self._cache_root,
+                               progress=lambda f, msg: report(0.4 + 0.58 * f, msg), cancel=cancel)
+                paths = paths + figures.finish()
             return {'paths': paths, 'dir': snap['fig_dir'], 'missing': missing,
                     'no_bins': tables['bins'].empty}
         self._dispatch(work, "redraw")

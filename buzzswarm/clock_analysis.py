@@ -878,8 +878,15 @@ def default_alias(experiment_dir):
     return f'{os.path.basename(os.path.dirname(folder))}_{os.path.basename(folder)}'
 
 
+def day_cache_dir(experiment_dir, alias=None, cache_root=None):
+    """Where an experiment's day caches go: {cache_root}/{alias}/ or plots/buzzswarm/day_cache/."""
+    if cache_root:
+        return os.path.join(cache_root, alias or default_alias(experiment_dir))
+    return os.path.join(experiment_output_dir(experiment_dir), 'day_cache')
+
+
 def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=None, workers=None,
-        swarm_radius_px=SWARM_RADIUS_PX, progress=None, cancel=None):
+        swarm_radius_px=SWARM_RADIUS_PX, progress=None, cancel=None, on_day=None):
     """Compute clock-time metrics for several experiments.
 
     experiments: list of dicts {'folder', 'group', 'days': ['YYYY-MM-DD', ...],
@@ -891,7 +898,8 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
     per experiment, its dict's 'swarm_radius_px', else the radius saved with save_swarm_radius,
     else swarm_radius_px (metrics only, caches are unaffected). workers=None picks a
     memory-safe count per day. progress(fraction 0-1, message) is called from the calling
-    thread; a set `cancel` Event raises Cancelled.
+    thread; a set `cancel` Event raises Cancelled. on_day(experiment dict with 'alias' and
+    'group', date, day) is called with each day while it is loaded (flight_maps draws from it).
     Returns a dict of DataFrames for all experiments together: bins, windows, swarm_size, minutes,
     profile, heatmap; plus 'geometry': {alias: geometry.json payload} (same shape as load_outputs)."""
     if windows is None:
@@ -915,8 +923,7 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
         radius = exp.get('swarm_radius_px') or load_swarm_radius(folder) or swarm_radius_px
         geo = experiment_geometry(folder, radius)
         segments = list_segments(folder)
-        cache_dir = (os.path.join(cache_root, alias) if cache_root
-                     else os.path.join(experiment_output_dir(folder), 'day_cache'))
+        cache_dir = day_cache_dir(folder, alias, cache_root)
         exp_rows = {k: [] for k in tables}
         for date_str in exp['days']:
             if cancel is not None and cancel.is_set():
@@ -936,6 +943,8 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
                      'ld_dd': tags.get(date_str, 'LD'), 'swarm_radius_px': geo['swarm_radius']}
             for key, rows in day_metrics(day, geo, bin_minutes, windows).items():
                 exp_rows[key].extend(dict(ident, **r) for r in rows)
+            if on_day is not None:
+                on_day(dict(exp, alias=alias, group=group), date_str, day)
             del day
             done += 1
         out_dir = os.path.join(out_root, alias) if out_root else experiment_output_dir(folder)

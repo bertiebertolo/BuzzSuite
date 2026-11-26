@@ -479,13 +479,21 @@ def centre_profile(profile):
     return fig, pd.concat(rows, ignore_index=True)
 
 
-def heatmaps(heatmap, geometry=None):
+def _light_low_end(cmap):
+    """True when the colormap starts light (e.g. Greys, Blues), so overlays must be dark."""
+    from matplotlib import colormaps
+    r, g, b = colormaps[cmap](0.0)[:3] if isinstance(cmap, str) else cmap(0.0)[:3]
+    return 0.299 * r + 0.587 * g + 0.114 * b > 0.6
+
+
+def heatmaps(heatmap, geometry=None, cmap='magma'):
     """Rows = windows, columns = groups: share of real flight per cell around the cage centre
     (mean of the group's days; image orientation, camera below). Cage outline and the swarm
-    zone are drawn on top. Colours are shared along each row."""
+    zone are drawn on top. Colours are shared along each row; cmap is a matplotlib colormap."""
     if heatmap.empty:
         return None, None
     geometry = geometry or {}
+    border, zone = ('0.2', 'tab:blue') if _light_low_end(cmap) else ('w', 'c')
     groups = _groups(heatmap)
     order = _window_order(heatmap['window'])
     # the experiments' own cell size (it scales with their swarm zone); with several sizes, the
@@ -527,7 +535,7 @@ def heatmaps(heatmap, geometry=None):
                 ax.set_title(f'{w}\n{g}', fontsize=9)
                 continue
             im = ax.imshow(grids[g], origin='upper', extent=[-half, half, half, -half],
-                           cmap='magma', vmin=0, vmax=vmax, interpolation='nearest')
+                           cmap=cmap, vmin=0, vmax=vmax, interpolation='nearest')
             for exp in heatmap.loc[heatmap.group == g, 'experiment'].unique():
                 geo = geometry.get(exp)
                 if not geo:
@@ -535,27 +543,29 @@ def heatmaps(heatmap, geometry=None):
                 cx, cy = geo['centroid']
                 poly = np.asarray(geo['polygon'], dtype=float) - [cx, cy]
                 poly = np.vstack([poly, poly[:1]])
-                ax.plot(poly[:, 0], poly[:, 1], color='w', lw=0.8, alpha=0.7)
+                ax.plot(poly[:, 0], poly[:, 1], color=border, lw=0.8, alpha=0.7)
                 t = np.linspace(0, 2 * np.pi, 120)
                 rz = geo.get('swarm_radius_px', ca.SWARM_RADIUS_PX)
-                ax.plot(rz * np.cos(t), rz * np.sin(t), color='c', lw=0.8, ls='--')
+                ax.plot(rz * np.cos(t), rz * np.sin(t), color=zone, lw=0.8, ls='--')
             ax.set_xlim(-half, half)
             ax.set_ylim(half, -half)
             ax.set_title(f'{w}\n{g}', fontsize=9)
         if im is not None:
             fig.colorbar(im, ax=list(axes[ri, :]), shrink=0.85, label='Share of real flight per cell')
-    fig.suptitle('Where the real flight is (seen from below;\ncyan = swarm zone, white = cage border)',
-                 fontsize=10)
+    names = {'w': 'white', 'c': 'cyan', '0.2': 'dark grey', 'tab:blue': 'blue'}
+    fig.suptitle(f'Where the real flight is (seen from below;\n{names[zone]} = swarm zone, '
+                 f'{names[border]} = cage border)', fontsize=10)
     return fig, (pd.concat(rows, ignore_index=True) if rows else None)
 
 
 # ==== everything ====
 
 def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAULT_NIGHT, dpi=120,
-               progress=None, cancel=None):
+               progress=None, cancel=None, heat_cmap='magma'):
     """Draw every plot from run()/load_outputs() tables into out_dir (PNG + CSV of the numbers
     shown). Returns the PNG paths, headline swarm plots first. progress(fraction, message);
-    a set `cancel` Event raises clock_analysis.Cancelled between plots."""
+    a set `cancel` Event raises clock_analysis.Cancelled between plots. heat_cmap: the grid
+    heatmaps' colormap."""
     os.makedirs(out_dir, exist_ok=True)
     metrics = metrics or DEFAULT_METRICS
     empty = pd.DataFrame()
@@ -564,7 +574,7 @@ def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAUL
         ('swarm_timecourse', lambda: swarm_timecourse(t['minutes'], night)),
         ('swarm_size_distribution', lambda: swarm_distribution(t['swarm_size'], t['minutes'])),
         ('swarm_vs_flying', lambda: swarm_vs_flying(t['minutes'], night)),
-        ('heatmaps', lambda: heatmaps(t['heatmap'], tables.get('geometry'))),
+        ('heatmaps', lambda: heatmaps(t['heatmap'], tables.get('geometry'), heat_cmap)),
         ('centre_profile', lambda: centre_profile(t['profile'])),
         ('window_summary', lambda: window_summary(t['windows'])),
     ]

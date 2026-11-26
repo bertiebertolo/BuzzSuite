@@ -5,6 +5,19 @@ day-by-day working notes.
 
 ## [Unreleased]
 
+- **BuzzSwarm: fruitless-paper style figures** (`buzzswarm/flight_maps.py`), from every flight of
+  2 s or more in each clock window (the engine's strict flights, as in the paper; independent of
+  the swarm zone):
+  - heatmaps as in the paper (log scale, scaled to each panel's 99th percentile, smoothed) with a
+    choice of **bins** across the cage (default 1000, as the paper) and **colour** (white to the
+    group's colour, or any matplotlib colour map; a colour map also recolours the grid heatmaps);
+  - **flight paths** per day (every flight in each window) and the **30 longest flights**, one
+    panel each;
+  - **Make GIFs**: each window of each ticked day replayed at a chosen speed-up (default 60x),
+    e.g. dawn, midday and dusk. GIFs play in the plot viewer.
+  - The same from the command line: `swarm --which clock --heatmap-bins --heatmap-colour
+    --no-flight-paths --gifs --gif-speedup`.
+
 - **Intake:** choosing the data folder no longer silently makes a new data tree inside an
   experiment (one lab PC got `…\tracking_moving\Buzzwatch\Analysis\…`, and every later experiment
   went there). A folder inside an experiment or inside an Analysis/Recording tree now gets a

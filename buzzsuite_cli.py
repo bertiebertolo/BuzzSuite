@@ -191,7 +191,8 @@ def cmd_track(args):
 
 # ----------------------------------------------------------------- swarm
 _FRU2_ONLY = ('min_flight_frames', 'speed_min', 'speed_max', 'sholl_step')
-_CLOCK_ONLY = ('days', 'windows', 'mode', 'metrics', 'group', 'out', 'cache', 'workers')
+_CLOCK_ONLY = ('days', 'windows', 'mode', 'metrics', 'group', 'out', 'cache', 'workers',
+               'heatmap_bins', 'heatmap_colour', 'no_flight_paths', 'gifs', 'gif_speedup')
 
 
 def _flag(name):
@@ -263,7 +264,14 @@ def _swarm_clock(args, exp_dirs):
     from path_utils import get_package_root
     from buzzswarm import clock_analysis as ca
     from buzzswarm import clock_plots as cp
+    from buzzswarm import flight_maps as fm
 
+    try:
+        heat_bins = fm.check_bins(args.heatmap_bins if args.heatmap_bins is not None else fm.HEATMAP_BINS)
+        heat_colour = fm.check_colour(args.heatmap_colour)
+    except ValueError as exc:
+        raise SystemExit("--heatmap-%s: %s." % ("bins" if "bins" in str(exc) else "colour", exc))
+    gif_speedup = args.gif_speedup if args.gif_speedup is not None else fm.GIF_SPEEDUP
     if args.group and len(args.group) != len(exp_dirs):
         raise SystemExit("--group needs one name per experiment (%d given for %d)."
                          % (len(args.group), len(exp_dirs)))
@@ -324,6 +332,11 @@ def _swarm_clock(args, exp_dirs):
         if label not in windows:
             windows.append(label)
     windows.sort(key=lambda w: ca.parse_window(w)[1])     # as the tab lists them
+    if args.gifs:
+        try:
+            fm.gif_frames(windows, gif_speedup)
+        except ValueError as exc:
+            raise SystemExit("--gif-speedup: %s." % exc)
 
     if args.out:
         fig_dir = os.path.join(args.out, 'figures')
@@ -349,9 +362,13 @@ def _swarm_clock(args, exp_dirs):
             shown.update(t=now, head=head)
 
     t0 = time.time()
+    figures = fm.PaperFigures(experiments, windows, fig_dir, bins=heat_bins, colour=heat_colour,
+                              flights=not args.no_flight_paths, gifs=bool(args.gifs), speedup=gif_speedup)
     tables = ca.run(experiments, bin_minutes, windows, cache_root=args.cache, out_root=args.out,
-                    workers=args.workers, progress=progress)
-    paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night)
+                    workers=args.workers, progress=progress, on_day=figures.add_day)
+    paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night,
+                          heat_cmap='magma' if heat_colour == fm.GROUP_COLOUR else heat_colour)
+    paths += figures.finish()
     for e in experiments:
         _log("CSVs       -> %s" % (os.path.join(args.out, e['alias']) if args.out
                                    else ca.experiment_output_dir(e['folder'])))
@@ -601,6 +618,18 @@ def build_parser():
                        help="Day caches in DIR/<alias>/ (default: <exp>/plots/buzzswarm/day_cache/).")
     clock.add_argument("--workers", type=int, default=None,
                        help="Processes per day while building a day cache (default: memory-safe auto).")
+    clock.add_argument("--heatmap-bins", type=int, default=None, metavar="N",
+                       help="Bins across the cage for the paper-style heatmaps (default 1000, as the "
+                            "fruitless paper; e.g. 50 for coarse blocks).")
+    clock.add_argument("--heatmap-colour", default=None, metavar="NAME",
+                       help="'group colour' (default: white to the group's colour, as the paper) or a "
+                            "matplotlib colour map, e.g. magma, viridis, Greys_r.")
+    clock.add_argument("--no-flight-paths", action="store_true", default=None,
+                       help="Skip the per-day flight-path and 30-longest-flight figures.")
+    clock.add_argument("--gifs", action="store_true", default=None,
+                       help="Also make a GIF of every window of every day (figures/gifs/).")
+    clock.add_argument("--gif-speedup", type=float, default=None, metavar="X",
+                       help="GIF playback speed vs real time (default 60: a 30-min window in 30 s).")
     fru2 = s.add_argument_group("fru2 analyses (sholl / pooled / per-traj / all)")
     fru2.add_argument("--min-flight-frames", type=int, default=None, help="Engine MIN_FLIGHT_FRAMES (default 50).")
     fru2.add_argument("--speed-min", type=float, default=None, help="Engine SPEED_FILTER_MIN px/frame (default 1.0).")

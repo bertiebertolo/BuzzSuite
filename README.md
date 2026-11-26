@@ -10,7 +10,7 @@ back-end, and one experiment format:
 | Module | What it does |
 |---|---|
 | **BuzzWatch (Activity)** | Tracks flying/resting mosquito activity per cage from raw video (motion-aware Hungarian-assignment tracker with blob splitting for crowded frames). |
-| **BuzzSwarm (Aggregation)** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day. The swarm zone's radius is set per experiment on a picture of the cage, and the other zone sizes follow it. The same analysis runs headless with `buzzsuite_cli.py swarm --which clock`; the older Sholl/r50 analyses remain available from the CLI. |
+| **BuzzSwarm (Aggregation)** | Aggregation/swarming analysis by real clock time, one calendar day at a time: swarm size (mosquitoes in flight in the cage centre at the same moment), heatmaps and a centre profile of where they fly, speed, turning and nearest-neighbour distance, per clock window and through the day; fruitless-paper style heatmaps (bins and colour of your choice), flight paths, the longest flights and GIFs of each window. The swarm zone's radius is set per experiment on a picture of the cage, and the other zone sizes follow it. The same analysis runs headless with `buzzsuite_cli.py swarm --which clock`; the older Sholl/r50 analyses remain available from the CLI. |
 | **BuzzPhono (Phonotaxis)** | Phonotaxis analysis — does a sound draw mosquitoes to the speaker? Speaker-zone resting fraction during the tone vs. just before, every hour, with cluster-robust statistics, sham and control-zone checks, time courses, time of day, spatial maps, directed flight, flight phonotaxis, reliability and sensitivity. Its own package and browser app (`src/buzzphono/`, environment `buzzphono_env`); see the [BuzzPhono guide](docs/BUZZPHONO_GUIDE.md). |
 | **yolo_export** | Training data for a live (on-camera) mosquito detector, built from BuzzWatch tracking and the original videos: YOLO tile datasets, calibration tiles, clips and QA. Command line only. |
 
@@ -149,8 +149,19 @@ Needs a tracked experiment with a cage border (BuzzWatch steps 1-4).
 3. Tick the days, keep the default clock windows (or add your own), then **Run analysis**.
    **Redraw plots** changes the plots without re-reading the tracking. Plots and CSVs go to the
    experiment's `plots/buzzswarm/`.
+4. **Heatmaps, flight paths and GIFs** (the fruitless paper's style, from every flight of 2 s or
+   more in each window; they do not depend on the swarm zone):
+   - **Heatmap bins** across the cage (1000 as in the paper; fewer, e.g. 50, for coarse blocks) and
+     **Colour** (white to the group's colour, as in the paper, or a colour map such as magma or
+     viridis). **Redraw plots** applies a change.
+   - **Flight paths and the 30 longest flights**: per day, every flight in each window, and the
+     30 longest one by one (`figures/flights/`).
+   - **Make GIFs**: each window of each ticked day replayed (`figures/gifs/`); **GIF speed-up** 60
+     plays a 30-min window in 30 s. With the default windows these are dawn, midday and dusk.
+     GIFs play in the plot viewer.
 
-Headless: `python buzzsuite_cli.py swarm --experiment <exp-dir> --which clock`.
+Headless: `python buzzsuite_cli.py swarm --experiment <exp-dir> --which clock` (add
+`--heatmap-bins 200 --heatmap-colour magma --gifs` for the options above).
 
 ### BuzzPhono (Phonotaxis)
 
@@ -244,8 +255,9 @@ ld_dd.py                     ← light schedule (night hours, LD/DD days) shared
 experiment_manager.py        ← experiment_{alias}.json + folder structure
 batch_processing_tab_manager.py, *_tab_manager.py   ← per-tab UI + orchestration
 buzzwatch_data_analysis/     ← the tracking engine (see note below)
-buzzswarm/                   ← BuzzSwarm: clock-time swarm analysis (clock_analysis.py) and
-                               its plots (clock_plots.py), plus the older Sholl/r50 scripts
+buzzswarm/                   ← BuzzSwarm: clock-time swarm analysis (clock_analysis.py), its plots
+                               (clock_plots.py), paper-style heatmaps, flight paths and GIFs
+                               (flight_maps.py), plus the older Sholl/r50 scripts
 src/buzzphono/               ← BuzzPhono phonotaxis package + app (own env; docs/BUZZPHONO_GUIDE.md)
 buzzphono_bridge.py          ← runs BuzzPhono from BuzzSuite (CLI, run_all_analysis, Phonotaxis tab)
 yolo_export/                 ← live-detector training data from BuzzWatch tracking

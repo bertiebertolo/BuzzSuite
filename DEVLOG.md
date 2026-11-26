@@ -206,3 +206,32 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
 - **Tests:** `tests/buzzsuite/` (stdlib runner, `python tests/buzzsuite/run_all.py`, no pytest needed in
   buzzsuite_env). BuzzPhono 1.0.0. Tagged v1.0.0.
 - **Intake (after the tag):** the data-folder Browse made a whole data tree inside an experiment's `tracking_moving/` on a lab PC (picked folder + `Buzzwatch`, remembered for every later experiment). `data_root_choice()` now uses an existing data folder as it is and warns (default No) for a folder inside an experiment or an Analysis/Recording tree. Feeder branch deleted after merge (GitHub copy was the same commit pre-rebase). `D:\BuzzSuite\DEVLOG.md` is byte-identical to the G: one (ends 09-25): the 09-25 to 11-05 log is not recoverable from there.
+
+## 2026-11-26 — BuzzSwarm: fruitless-paper heatmaps, flight paths, GIFs; radius check
+
+- New `buzzswarm/flight_maps.py` (the user asked for adjustable heatmap bins, a heatmap colour choice,
+  individual and group trajectories and GIFs of dawn / midday / dusk, and said the fruitless paper's
+  heatmap style was better). It draws from the day caches, using the engine's strict flights
+  (`tracks`, >= 50 frames) cut to each clock window, exactly as fru2's `flights_in_zt_window`:
+  - `heatmaps_paper.png`: fru2's `plot_heatmap_single` (log1p, / 99th percentile, clipped,
+    white -> group colour, bilinear), rows = windows, columns = groups, pooled over the group's days,
+    in centroid-relative image coordinates (fru2's heatmaps were not y-flipped; these match the
+    trajectories and the cage image). Bins across the cage default to fru2's 1000. Counts in
+    `heatmaps_paper_counts.npz` (a CSV of 1000 x 1000 bins would be tens of MB).
+  - `flights/flights_<alias>_<date>.png` (+ CSV, one row per flight): every flight per window, fru2's
+    combined-trajectory style; `flights/top30_...png`: the 30 longest (fru2's montage, page 1).
+  - `gifs/<alias>_<date>_<HHMM-HHMM>.gif`: each window replayed (default 60x, 10 fps; the last 3 steps
+    drawn, the newest strongest, a dot per flyer; fixed palette so colours do not flicker). ~10 s and
+    2-4 MB per 30-min GIF.
+  - Run analysis draws them from each day while `run()` has it loaded (new `on_day` hook); Redraw and
+    Make GIFs load the day caches again (`from_caches`). The tab has bins / colour / flight paths /
+    GIF speed-up / Make GIFs; `ImagePreview` plays animated GIFs; the CLI has `--heatmap-bins
+    --heatmap-colour --no-flight-paths --gifs --gif-speedup`. Tests: `test_swarm_paper_figures.py`.
+- Radius check (the user saw plots change after the swarm-zone radius work): the pre-scaling code
+  (a08ec1e) and the current code give identical bins / windows / swarm-size / minutes / profile /
+  heatmap tables on a synthetic 6000-flight day at the default 100 px. With a saved radius of 150 px
+  everything px-based scales by 1.5 (real-flight threshold 3 -> 4.5 px/frame, central / core zones,
+  shape rings, 20 -> 30 px heatmap cells): on that day n_flying -17..-21%, swarm_mean -17..-23%,
+  central_enrichment -25..-31%, speed +15..+19%. So the plots of an experiment with a saved swarm zone
+  changed by design (faa4916); the tracking and the day caches did not. Whether the speed threshold
+  should follow the swarm zone (camera scale) or stay at 3 px/frame is a question for the user.
