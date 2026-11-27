@@ -23,6 +23,7 @@ import math
 import os
 import re
 import sys
+import textwrap
 
 import numpy as np
 import pandas as pd
@@ -560,14 +561,27 @@ def heatmaps(heatmap, geometry=None, cmap='magma'):
 
 # ==== everything ====
 
+def speed_filter_note(geometry):
+    """A footnote for the figures when the real-flight speed filter was off (geometry.json
+    'speed_filter' False) for some or all experiments; None when it was on for all."""
+    off = sorted(e for e, g in (geometry or {}).items() if g.get('speed_filter') is False)
+    if not off:
+        return None
+    what = 'every tracked flight point counts as flight, not only fast flight'
+    if len(off) == len(geometry):
+        return f'Speed filter off: {what}.'
+    return f'Speed filter off for {", ".join(off)}: {what}.'
+
+
 def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAULT_NIGHT, dpi=120,
                progress=None, cancel=None, heat_cmap='magma'):
     """Draw every plot from run()/load_outputs() tables into out_dir (PNG + CSV of the numbers
     shown). Returns the PNG paths, headline swarm plots first. progress(fraction, message);
     a set `cancel` Event raises clock_analysis.Cancelled between plots. heat_cmap: the grid
-    heatmaps' colormap."""
+    heatmaps' colormap. Every figure says so when the speed filter was off (speed_filter_note)."""
     os.makedirs(out_dir, exist_ok=True)
     metrics = metrics or DEFAULT_METRICS
+    note = speed_filter_note(tables.get('geometry'))
     empty = pd.DataFrame()
     t = {k: tables.get(k, empty) for k in ('bins', 'windows', 'swarm_size', 'minutes', 'profile', 'heatmap')}
     jobs = [
@@ -590,6 +604,9 @@ def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAUL
         fig, summary = make()
         if fig is None:
             continue
+        if note:     # wrapped to the figure (about 14 characters per inch at 9 pt)
+            fig.supxlabel(textwrap.fill(note, max(30, int(fig.get_figwidth() * 14))),
+                          fontsize=9, color='#b3261e')
         path = os.path.join(out_dir, name + '.png')
         fig.savefig(path, dpi=dpi)
         if summary is not None:

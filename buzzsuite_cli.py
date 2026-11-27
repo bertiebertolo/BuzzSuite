@@ -192,7 +192,8 @@ def cmd_track(args):
 # ----------------------------------------------------------------- swarm
 _FRU2_ONLY = ('min_flight_frames', 'speed_min', 'speed_max', 'sholl_step')
 _CLOCK_ONLY = ('days', 'windows', 'mode', 'metrics', 'group', 'out', 'cache', 'workers',
-               'heatmap_bins', 'heatmap_colour', 'no_flight_paths', 'gifs', 'gif_speedup')
+               'heatmap_bins', 'heatmap_colour', 'no_flight_paths', 'gifs', 'gif_speedup',
+               'no_speed_filter')
 
 
 def _flag(name):
@@ -350,6 +351,8 @@ def _swarm_clock(args, exp_dirs):
         _log("Experiment : %s  [group %s]  days %s" % (e['folder'], e['group'], ", ".join(e['days'])))
     _log("Windows    : %s | bins %d min | view %s | metrics %s"
          % (", ".join(windows), bin_minutes, args.mode or 'overlay', ", ".join(metrics)))
+    if args.no_speed_filter:
+        _log("Speed filter off: every tracked flight point counts as flight.")
 
     shown = {'t': 0.0, 'head': None}
 
@@ -365,7 +368,8 @@ def _swarm_clock(args, exp_dirs):
     figures = fm.PaperFigures(experiments, windows, fig_dir, bins=heat_bins, colour=heat_colour,
                               flights=not args.no_flight_paths, gifs=bool(args.gifs), speedup=gif_speedup)
     tables = ca.run(experiments, bin_minutes, windows, cache_root=args.cache, out_root=args.out,
-                    workers=args.workers, progress=progress, on_day=figures.add_day)
+                    workers=args.workers, progress=progress, on_day=figures.add_day,
+                    speed_filter=not args.no_speed_filter)
     paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night,
                           heat_cmap='magma' if heat_colour == fm.GROUP_COLOUR else heat_colour)
     paths += figures.finish()
@@ -630,6 +634,10 @@ def build_parser():
                        help="Also make a GIF of every window of every day (figures/gifs/).")
     clock.add_argument("--gif-speedup", type=float, default=None, metavar="X",
                        help="GIF playback speed vs real time (default 60: a 30-min window in 30 s).")
+    clock.add_argument("--no-speed-filter", action="store_true", default=None,
+                       help="Count every tracked flight point as flight, not only real flight "
+                            "(>= 3 px/frame on the old camera). r50 and the paper-style figures "
+                            "are the same either way.")
     fru2 = s.add_argument_group("fru2 analyses (sholl / pooled / per-traj / all)")
     fru2.add_argument("--min-flight-frames", type=int, default=None, help="Engine MIN_FLIGHT_FRAMES (default 50).")
     fru2.add_argument("--speed-min", type=float, default=None, help="Engine SPEED_FILTER_MIN px/frame (default 1.0).")

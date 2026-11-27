@@ -19,6 +19,7 @@ speed bounds, density artifacts):
            flight points: smoothed speed (displacement i-2 -> i+2 inside one piece, / 4 frames)
            >= FLY_PX_FRAME. Speeds are bimodal (frozen positions at 0, flight at ~8-15 px/frame);
            near the walls most tracker "flight" points are frozen and would swamp the metrics.
+           run(speed_filter=False) counts every point instead (e.g. to see slow flight at a feeder).
 
 Camera geometry (Flare): filmed from below looking up, so the image centre is the cage's central
 column (at any height) and the centre square is the ceiling. Image area is therefore not a true
@@ -689,10 +690,15 @@ def smoothed_motion(flight, fly_px_frame=FLY_PX_FRAME):
 
 def _flight_table(flight, fps, d0, geo):
     """Real-flight points sorted by time, plus per-frame counts for the whole day: all real
-    flyers and those inside the swarm zone, and which frames were recorded at all."""
+    flyers and those inside the swarm zone, and which frames were recorded at all. With
+    geo['speed_filter'] False every point of every flight piece counts (no speed cut-off); the
+    turning rate still needs the 2-frame steps of >= 2 x fly_px_frame that give it a direction."""
     fly = _px(geo)['fly_px_frame']
     speed, turn, pid = smoothed_motion(flight, fly)
-    real = np.nan_to_num(speed, nan=0.0) >= fly
+    if geo.get('speed_filter', True):
+        real = np.nan_to_num(speed, nan=0.0) >= fly
+    else:
+        real = np.ones(len(speed), dtype=bool)
     c, t = flight['coords'][real], flight['t_ns'][real]
     frame_ns = _NS / float(fps)
     f = np.rint((t - d0) / frame_ns).astype(np.int64)
@@ -826,6 +832,7 @@ def _interval_metrics(tr, ft, rec, geo, day, lo, hi, d0):
     else:
         out['central_enrichment'] = out['core_density'] = out['shape_index'] = np.nan
     sp = ft['speed'][pa:pb]
+    sp = sp[np.isfinite(sp)]          # without the speed filter, piece ends have no smoothed speed
     out['speed_px_s'] = float(np.median(sp)) * fps if len(sp) >= MIN_SAMPLES else np.nan
     tn = ft['turn'][pa:pb]
     tn = tn[np.isfinite(tn)]
@@ -916,7 +923,7 @@ def day_cache_dir(experiment_dir, alias=None, cache_root=None):
 
 
 def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=None, workers=None,
-        swarm_radius_px=None, progress=None, cancel=None, on_day=None):
+        swarm_radius_px=None, progress=None, cancel=None, on_day=None, speed_filter=True):
     """Compute clock-time metrics for several experiments.
 
     experiments: list of dicts {'folder', 'group', 'days': ['YYYY-MM-DD', ...],
@@ -931,6 +938,9 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
     memory-safe count per day. progress(fraction 0-1, message) is called from the calling
     thread; a set `cancel` Event raises Cancelled. on_day(experiment dict with 'alias' and
     'group', date, day) is called with each day while it is loaded (flight_maps draws from it).
+    speed_filter=False drops the real-flight speed cut-off: every tracked flight point counts in
+    the frame-level metrics, the centre profile and the heatmap cells (the tracks-based metrics
+    and the day caches are the same either way; geometry.json records the choice).
     Returns a dict of DataFrames for all experiments together: bins, windows, swarm_size, minutes,
     profile, heatmap; plus 'geometry': {alias: geometry.json payload} (same shape as load_outputs)."""
     if windows is None:
@@ -953,6 +963,7 @@ def run(experiments, bin_minutes=10, windows=None, cache_root=None, out_root=Non
         tags = exp.get('tags') or {}
         radius = exp.get('swarm_radius_px') or load_swarm_radius(folder) or swarm_radius_px
         geo = experiment_geometry(folder, radius)
+        geo['speed_filter'] = bool(speed_filter)
         segments = list_segments(folder)
         cache_dir = day_cache_dir(folder, alias, cache_root)
         exp_rows = {k: [] for k in tables}
@@ -1008,7 +1019,8 @@ def _write_geometry(out_dir, alias, group, geo):
                     'central_radius_px': px['central_radius_px'],
                     'core_px': px['core_px'], 'shape_ring_px': px['shape_ring_px'],
                     'shape_max_px': px['shape_max_px'], 'heat_cell_px': px['heat_cell_px'],
-                    'fly_px_frame': px['fly_px_frame']})
+                    'fly_px_frame': px['fly_px_frame'],
+                    'speed_filter': bool(geo.get('speed_filter', True))})
     with open(os.path.join(out_dir, 'geometry.json'), 'w') as f:
         json.dump(payload, f, indent=2)
     return payload

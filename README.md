@@ -149,7 +149,10 @@ Needs a tracked experiment with a cage border (BuzzWatch steps 1-4).
    flight-speed threshold follow the camera's resolution (frame width / 1280).
 3. Tick the days, keep the default clock windows (or add your own), then **Run analysis**.
    **Redraw plots** changes the plots without re-reading the tracking. Plots and CSVs go to the
-   experiment's `plots/buzzswarm/`.
+   experiment's `plots/buzzswarm/`. **Speed filter** (on by default) counts only real flight
+   (at least 3 px/frame on the old camera); untick it to count every tracked flight point, slow or
+   hovering ones too (e.g. at a feeder), then Run analysis again. The figures then say so in red.
+   The paper-style heatmaps, flight paths, GIFs and r50 are the same either way.
 4. **Heatmaps, flight paths and GIFs** (the fruitless paper's style, from every flight of 2 s or
    more in each window; they do not depend on the swarm zone):
    - **Heatmap bins** across the cage (1000 as in the paper; fewer, e.g. 50, for coarse blocks) and
@@ -162,7 +165,7 @@ Needs a tracked experiment with a cage border (BuzzWatch steps 1-4).
      GIFs play in the plot viewer.
 
 Headless: `python buzzsuite_cli.py swarm --experiment <exp-dir> --which clock` (add
-`--heatmap-bins 200 --heatmap-colour magma --gifs` for the options above).
+`--heatmap-bins 200 --heatmap-colour magma --gifs --no-speed-filter` for the options above).
 
 ### BuzzPhono (Phonotaxis)
 

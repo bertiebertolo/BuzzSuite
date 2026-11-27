@@ -5,6 +5,14 @@ day-by-day working notes.
 
 ## [Unreleased]
 
+- **BuzzSwarm: speed filter switch.** Plotting → Swarming → **Speed filter** (on by default). Off,
+  every tracked flight point counts, not only real flight (>= 3 px/frame on the old camera), e.g.
+  to see slow flight at a feeder. It changes the swarm size, mosquitoes in flight, the grid
+  heatmaps, the centre profile, speed and nearest neighbours; r50, the paper-style figures and the
+  day caches are the same either way, so Run analysis applies it without re-reading the tracking.
+  `geometry.json` records it and every figure made with it off says so. CLI:
+  `swarm --which clock --no-speed-filter`.
+
 - **BuzzSwarm: pixel settings follow the camera, not the swarm zone.** In 1.0.0 the real-flight
   speed cut-off, the central and core zones, the shape rings and the heatmap cells grew with a
   chosen swarm radius, so choosing a bigger zone also changed who counted as flying (e.g. a 150 px

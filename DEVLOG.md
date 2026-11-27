@@ -243,3 +243,20 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   threshold follows the camera too. Check: on a 720p frame the current code and a08ec1e give
   identical tables for 60, 100 and 150 px zones. Width rather than height: for 4:3 sensor modes the
   two differ; width is what the option the user chose described (1280 px wide = the old camera).
+
+## 2026-11-27 — BuzzSwarm: speed filter switch
+
+- The user asked for an option to disable speed filtering in the Plotting tab. Activity plots have
+  none; Swarming has two (the per-point real-flight cut-off and the engine's per-flight 1-40 px/frame
+  average-speed bounds, baked into the day caches). Asked: the user chose the real-flight cut-off
+  only (no cache rebuild).
+- Plots > Swarming > Plots: **Speed filter (count only real flight)**, on by default, saved in the
+  view (`speed_filter`). `run(speed_filter=False)` sets `geo['speed_filter']`; `_flight_table` then
+  keeps every point of every flight piece. Turning keeps its >= 2 x fly_px_frame step rule (an angle
+  needs movement); `speed_px_s` ignores piece ends without a smoothed speed. `geometry.json` records
+  `speed_filter`; `render_all` adds a red footnote to every figure when it was off
+  (`clock_plots.speed_filter_note`). Redraw says when the saved results were made the other way.
+  CLI: `swarm --which clock --no-speed-filter`. Unchanged either way: the day caches, tracks-based
+  metrics (r50, activity, straightness, prop_within), the paper-style heatmaps, flight paths, GIFs.
+- Check: filter on gives tables identical to 8003b82 (144 tables: two synthetic days, zones 60 / 100 /
+  150 px, camera scale 1 and 1.5). Tests: `test_swarm_speed_filter.py` (3); 35 pass on 3.8 and 3.12.

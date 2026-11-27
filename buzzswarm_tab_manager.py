@@ -6,7 +6,8 @@ the data is shown. "Run analysis" calls ``buzzswarm/clock_analysis.run`` (one ca
 calendar day; real-flight swarm metrics) on a worker thread under a cancellable progress dialog,
 then ``buzzswarm/clock_plots.render_all``. "Redraw plots" re-reads the CSVs the last run wrote, so
 changing the view, the metrics, the groups or unticking days never recomputes. Every figure goes
-to one folder and can be browsed on the right.
+to one folder and can be browsed on the right. "Speed filter" (on by default) keeps the
+real-flight speed cut-off; unticked, every tracked flight point counts (needs Run analysis).
 
 Outputs:
   - per experiment: CSVs + day caches in {exp}/plots/buzzswarm/ (day_cache/ holds ~150 MB a day);
@@ -256,6 +257,17 @@ class BuzzswarmTabManager:
         bin_entry.pack(side=tk.LEFT, padx=(4, 0))
         add_tooltip(bin_entry, "Width of each time bin for the through-the-day plots. Changing "
                     "it needs Run analysis.")
+        self.speed_filter_var = tk.BooleanVar(value=bool(saved.get('speed_filter', True)))
+        speed_check = tk.Checkbutton(plot_frame, text="Speed filter (count only real flight)",
+                                     variable=self.speed_filter_var)
+        speed_check.pack(side=tk.TOP, anchor="w", padx=2)
+        add_tooltip(speed_check, "Ticked (default): only points moving at least 3 px/frame (75 px/s on "
+                    "the old 720p camera, scaled with the camera's resolution) count as flight.\n"
+                    "Unticked: every tracked flight point counts, slow or hovering ones too (e.g. at a "
+                    "feeder). This changes the swarm size, mosquitoes in flight, the grid heatmaps, the "
+                    "centre profile, speed and nearest neighbours; not r50, the paper-style heatmaps, "
+                    "flight paths or GIFs (every flight >= 2 s either way).\nChanging it needs Run "
+                    "analysis (no tracking files are re-read, so cached days are quick).")
         tk.Label(plot_frame, text="Metrics through the day:").pack(side=tk.TOP, anchor="w", padx=4)
         self._metrics_frame = tk.Frame(plot_frame)
         self._metrics_frame.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
@@ -780,7 +792,8 @@ class BuzzswarmTabManager:
         view = {'windows': windows, 'bin_minutes': bin_minutes, 'mode': self.mode_var.get(),
                 'metrics': [m for m, v in self._metric_vars.items() if v.get()],
                 'heat_bins': heat_bins, 'heat_colour': heat_colour,
-                'flight_paths': bool(self.flight_paths_var.get()), 'gif_speedup': gif_speedup}
+                'flight_paths': bool(self.flight_paths_var.get()), 'gif_speedup': gif_speedup,
+                'speed_filter': bool(self.speed_filter_var.get())}
         self._save_view(view)
         if skipped:
             self.log(f"BuzzSwarm: no days ticked for {', '.join(skipped)}; leaving them out.")
@@ -838,7 +851,7 @@ class BuzzswarmTabManager:
             tables = ca.run(snap['experiments'], view['bin_minutes'], view['windows'],
                             cache_root=self._cache_root, out_root=self._out_root,
                             progress=lambda f, msg: report(0.85 * f, msg), cancel=cancel,
-                            on_day=figures.add_day)
+                            on_day=figures.add_day, speed_filter=view['speed_filter'])
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
                                   progress=lambda f, msg: report(0.85 + 0.1 * f, msg), cancel=cancel,
                                   heat_cmap=self._grid_cmap(view, fm))
@@ -904,6 +917,9 @@ class BuzzswarmTabManager:
             tables, missing = _select_tables(tables, units, groups)
             if all(df.empty for k, df in tables.items() if k != 'geometry'):
                 raise RuntimeError("No saved results for these days yet. Click Run analysis first.")
+            # results made with the other speed-filter setting (Redraw does not recompute)
+            other = sorted(a for a, g in (tables.get('geometry') or {}).items()
+                           if a in groups and bool(g.get('speed_filter', True)) != view['speed_filter'])
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
                                   progress=lambda f, msg: report(0.1 + 0.3 * f, msg), cancel=cancel,
                                   heat_cmap=self._grid_cmap(view, fm))
@@ -918,7 +934,7 @@ class BuzzswarmTabManager:
                                progress=lambda f, msg: report(0.4 + 0.58 * f, msg), cancel=cancel)
                 paths = paths + figures.finish()
             return {'paths': paths, 'dir': snap['fig_dir'], 'missing': missing,
-                    'no_bins': tables['bins'].empty}
+                    'no_bins': tables['bins'].empty, 'speed_filter_other': other}
         self._dispatch(work, "redraw")
 
     def _dispatch(self, work, describe):
@@ -997,6 +1013,10 @@ class BuzzswarmTabManager:
             note = f" Not analysed yet (Run analysis to add): {days}."
         if result.get('no_bins'):
             note += " No through-the-day results for this bin width; Run analysis to make them."
+        other = result.get('speed_filter_other')
+        if other:
+            note += (" The speed filter was set the other way when %s %s analysed; Run analysis "
+                     "to apply the new setting." % (", ".join(other), "was" if len(other) == 1 else "were"))
         self._finish(f"Done: {len(paths)} plots in {result['dir']}.{note}", f"{describe} done")
         self.log(f"BuzzSwarm: {describe} finished -> {result['dir']}")
         self._set_outputs(paths, result['dir'])
