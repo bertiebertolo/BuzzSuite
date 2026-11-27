@@ -202,7 +202,7 @@ def test_tab_controls_are_saved_and_plots_labelled():
             assert view["flight_paths"] is True
             assert UI.experiment_manager.saved["buzzswarm_view"]["heat_colour"] == "Greys_r"
             tab.heat_colour_var.set("nope")
-            assert tab._snapshot() is None and "not a matplotlib colormap" in UI.errors[-1]
+            assert tab._snapshot() is None and "neither a colour" in UI.errors[-1]
     finally:
         root.destroy()
     label = btm._plot_label

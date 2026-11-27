@@ -260,3 +260,43 @@ The first relaunch (11-10 12:09) died in the relabel at 12:14 with ^C (cause not
   metrics (r50, activity, straightness, prop_within), the paper-style heatmaps, flight paths, GIFs.
 - Check: filter on gives tables identical to 8003b82 (144 tables: two synthetic days, zones 60 / 100 /
   150 px, camera scale 1 and 1.5). Tests: `test_swarm_speed_filter.py` (3); 35 pass on 3.8 and 3.12.
+
+## 2026-11-27 — BuzzSwarm: heatmaps on white, one colour of the user's choice
+
+- Testing the speed filter, the user asked for a white heatmap background and a single colour of
+  their choosing, then for "choose a colour or enter a colour number". The grid heatmaps used magma
+  unless a colour map was picked (empty cells black); the paper-style ones were already white ->
+  group colour.
+- `clock_plots` now owns the colour setting (`GROUP_COLOUR`, `check_heat_colour`,
+  `heat_colormap`, `one_heat_colour`); `flight_maps.check_colour` / `heat_cmap` are aliases.
+  The setting is group colour (white -> each group's colour; the default for both heatmap kinds
+  now), one colour (white -> it: a name, `#d62728`, `d62728` or `214, 39, 40`, stored as `#d62728`)
+  or a colormap name (a name that is both, e.g. pink, is the colormap). Grid heatmaps with group
+  colours and several groups get a colour bar per panel on the row's shared scale; on a white low
+  end the cage border is grey (0.45) and the swarm zone black (was dark grey / tab:blue, which
+  vanished on a blue group). `render_all(heat_colour=...)` replaces `heat_cmap`.
+- Tab: a swatch and a **Colour...** button (tkinter colorchooser) beside the Colour box; six single
+  colours added to its list. CLI `--heatmap-colour` takes the same values.
+- Tests: `test_swarm_heat_colour.py` (6); 41 pass on 3.8 and 3.12. Looked at grid and paper-style
+  heatmaps drawn from made-up data (group colours and one colour).
+
+## 2026-11-27 — BuzzSwarm: GIFs build up the paths on the cage picture
+
+- The user asked for GIFs that build the trajectories up, overlaying each other, and showed a
+  camera frame of the cage as the look they wanted. Before, each frame showed only the last 3
+  steps (GIF_TRAIL_STEPS) on white.
+- `make_gif`: blitting. The cage picture, title and paths flown so far are a kept background; each
+  step's paths are drawn on it at GIF_BUILT_ALPHA (0.25) and kept, then the step is drawn strongly
+  with dark dots on the flyers, then the clock. Each step's path joins its flight's previous point
+  (`prev` index), so paths are continuous. The last frame is held GIF_HOLD_MS (2.5 s).
+- `gif_picture(folder, date, window)`: the `individual_images/` frame (named like the videos) whose
+  segment middle is nearest the window's middle that day (within 6 h), else
+  `ca.cage_reference_image`. Shown in grey, contrast-stretched (1% cut-off), faded to 70%
+  (GIF_PHOTO_FADE) so the paths stand out; placed by the cage centroid (tracking and frame pixels
+  are the same, as the swarm-zone picker assumes). No picture: white plus the cage outline, as
+  before. The fixed GIF palette gained colour-over-grey blends.
+- On this PC, `buzzsuite_env\python.exe` started without activation (base anaconda's Library\bin on
+  PATH, not the env's) dies with 0xc06d007f in any matplotlib draw; with the env's folders on PATH
+  (as `conda run` in run_buzzsuite.bat does) it is fine. Tests here are run with the env on PATH.
+- Tests: `test_swarm_gif_buildup.py` (2: build-up, hold, the day's frame, orientation, fallbacks);
+  43 pass on 3.8 and 3.12. Looked at frames of a GIF from made-up flights on a made-up cage picture.

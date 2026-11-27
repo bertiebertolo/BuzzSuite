@@ -370,8 +370,7 @@ def _swarm_clock(args, exp_dirs):
     tables = ca.run(experiments, bin_minutes, windows, cache_root=args.cache, out_root=args.out,
                     workers=args.workers, progress=progress, on_day=figures.add_day,
                     speed_filter=not args.no_speed_filter)
-    paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night,
-                          heat_cmap='magma' if heat_colour == fm.GROUP_COLOUR else heat_colour)
+    paths = cp.render_all(tables, fig_dir, args.mode or 'overlay', metrics, night, heat_colour=heat_colour)
     paths += figures.finish()
     for e in experiments:
         _log("CSVs       -> %s" % (os.path.join(args.out, e['alias']) if args.out
@@ -626,8 +625,9 @@ def build_parser():
                        help="Bins across the cage for the paper-style heatmaps (default 1000, as the "
                             "fruitless paper; e.g. 50 for coarse blocks).")
     clock.add_argument("--heatmap-colour", default=None, metavar="NAME",
-                       help="'group colour' (default: white to the group's colour, as the paper) or a "
-                            "matplotlib colour map, e.g. magma, viridis, Greys_r.")
+                       help="Colour of every heatmap: 'group colour' (default: white to each group's "
+                            "colour, as the paper), one colour (white to it), e.g. red or '#d62728', "
+                            "or a matplotlib colour map, e.g. magma, viridis, Greys_r.")
     clock.add_argument("--no-flight-paths", action="store_true", default=None,
                        help="Skip the per-day flight-path and 30-longest-flight figures.")
     clock.add_argument("--gifs", action="store_true", default=None,

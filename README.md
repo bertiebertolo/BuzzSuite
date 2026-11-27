@@ -156,13 +156,17 @@ Needs a tracked experiment with a cage border (BuzzWatch steps 1-4).
 4. **Heatmaps, flight paths and GIFs** (the fruitless paper's style, from every flight of 2 s or
    more in each window; they do not depend on the swarm zone):
    - **Heatmap bins** across the cage (1000 as in the paper; fewer, e.g. 50, for coarse blocks) and
-     **Colour** (white to the group's colour, as in the paper, or a colour map such as magma or
-     viridis). **Redraw plots** applies a change.
+     **Colour** for every heatmap, paper-style and grid: white to each group's colour (the
+     default, as in the paper), one colour of your choice (white to it: **Colour...** opens a
+     colour picker, or type a name such as `red` or a colour number such as `#d62728`, `d62728` or
+     `214, 39, 40`), or a colour map such as magma or viridis. **Redraw plots** applies a change.
    - **Flight paths and the 30 longest flights**: per day, every flight in each window, and the
      30 longest one by one (`figures/flights/`).
-   - **Make GIFs**: each window of each ticked day replayed (`figures/gifs/`); **GIF speed-up** 60
-     plays a 30-min window in 30 s. With the default windows these are dawn, midday and dusk.
-     GIFs play in the plot viewer.
+   - **Make GIFs**: each window of each ticked day replayed (`figures/gifs/`) on the camera's
+     picture of the cage (that day's frame nearest the window). The flight paths build up over
+     each other, so the last frame, held for 2.5 s, shows every flight of the window. **GIF
+     speed-up** 60 plays a 30-min window in 30 s. With the default windows these are dawn, midday
+     and dusk. GIFs play in the plot viewer.
 
 Headless: `python buzzsuite_cli.py swarm --experiment <exp-dir> --which clock` (add
 `--heatmap-bins 200 --heatmap-colour magma --gifs --no-speed-filter` for the options above).

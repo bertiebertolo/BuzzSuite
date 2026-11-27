@@ -10,11 +10,13 @@ real-flight metrics, nothing here depends on the swarm-zone radius.
   heatmaps_paper     rows = windows, columns = groups: every flight point of the group's days in
                      the window, counted in BINS x BINS bins across the cage (the paper: 1000),
                      shown as log(1 + count) scaled to the panel's own 99th percentile, white ->
-                     group colour (or a chosen colormap), smoothed (bilinear)
+                     group colour (or white -> one chosen colour, or a colormap), smoothed
+                     (bilinear)
   flights_*          per experiment-day: every flight in each window, one panel per window
   top*_*             per experiment-day and window: the longest flights (most frames) first, one
                      panel each (the paper's individual-trajectory montage, 30 per page)
-  gifs/*.gif         per experiment-day and window: the flights replayed, sped up (make_gifs)
+  gifs/*.gif         per experiment-day and window: the flights replayed, sped up, the paths
+                     building up over each other until the last frame shows them all (make_gif)
 
 Coordinates are image pixels relative to the cage centroid, in image orientation (camera below),
 so several experiments share one frame. Figures are plain matplotlib Figure objects (no pyplot),
@@ -23,13 +25,14 @@ safe to draw in a worker thread.
 
 import math
 import os
+import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
-from matplotlib.colors import LinearSegmentedColormap, to_rgb
+from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 
 try:
@@ -43,14 +46,20 @@ except ImportError:
 
 HEATMAP_BINS = 1000            # bins across the cage (fru2's HEATMAP_BINS)
 MARGIN_PX = 20                 # around the cage, as fru2's heatmap bounds
-GROUP_COLOUR = 'group colour'  # white -> the group's colour (the paper's heatmaps)
-COLOURS = (GROUP_COLOUR, 'magma', 'inferno', 'viridis', 'plasma', 'cividis', 'hot', 'turbo',
+GROUP_COLOUR = cp.GROUP_COLOUR  # white -> the group's colour (the paper's heatmaps)
+# the choices offered: each group's colour, one colour (white -> it), or a colormap; any colour
+# name or code (e.g. #1f77b4) and any matplotlib colormap name are accepted too
+COLOURS = (GROUP_COLOUR, 'black', 'red', 'blue', 'green', 'purple', 'orange',
+           'magma', 'inferno', 'viridis', 'plasma', 'cividis', 'hot', 'turbo',
            'Greys', 'Blues', 'Reds', 'YlOrRd')
 TOP_FLIGHTS = 30               # longest flights per window (fru2: 30 per montage page)
 TOP_COLS = 5
 GIF_SPEEDUP = 60               # a 30-min window plays in 30 s
 GIF_FPS = 10
-GIF_TRAIL_STEPS = 3            # each GIF frame shows the flight of the last 3 steps (older = fainter)
+GIF_BUILT_ALPHA = 0.25         # flights already flown stay drawn this faintly and overlay each other
+GIF_HOLD_MS = 2500             # the last frame (every flight of the window) stays up this long
+GIF_PHOTO_FADE = 0.7           # the cage picture behind a GIF keeps 70% of its contrast (paths show)
+_FRAME_RE = re.compile(r'^.+_(\d{8})_(\d{6})_(\d{5})\.png$', re.IGNORECASE)   # individual_images/
 GIF_MAX_FRAMES = 3000
 GIF_INCHES, GIF_DPI = 5.0, 90
 _NS = 1_000_000_000
@@ -67,31 +76,10 @@ def check_bins(bins):
     return n
 
 
-def check_colour(name):
-    """GROUP_COLOUR or the name of a matplotlib colormap (e.g. magma, viridis, Greys_r)."""
-    name = str(name or GROUP_COLOUR).strip()
-    if name.lower() == GROUP_COLOUR:
-        return GROUP_COLOUR
-    _colormap(name)
-    return name
-
-
-def _colormap(name):
-    try:
-        from matplotlib import colormaps
-        return colormaps[name]
-    except ImportError:                                     # matplotlib < 3.5
-        from matplotlib import cm
-        return cm.get_cmap(name)
-    except KeyError:
-        raise ValueError(f'{name!r} is not a matplotlib colormap (e.g. magma, viridis, Greys)') from None
-
-
-def heat_cmap(colour, group_colour):
-    """The colormap for one panel: white -> group colour (as fru2's sex_cmap) or a named one."""
-    if colour == GROUP_COLOUR:
-        return LinearSegmentedColormap.from_list('group', ['white', group_colour])
-    return _colormap(colour)
+# the heatmap colour, shared with the grid heatmaps: GROUP_COLOUR (white -> each group's colour,
+# as fru2's sex_cmap), one colour (white -> it) or a matplotlib colormap
+check_colour = cp.check_heat_colour
+heat_cmap = cp.heat_colormap
 
 
 def window_flights(tracks, date_str, window):
@@ -210,8 +198,10 @@ class PaperFigures:
             os.makedirs(gdir, exist_ok=True)
             for w, fl in per_window:
                 path = os.path.join(gdir, f'{tag}_{_window_file(w)}.gif')
+                picture = gif_picture(exp['folder'], date_str, w) if exp.get('folder') else None
                 make_gif(fl, date_str, w, path, self.colors[group], cage, self.half, self.speedup,
-                         title=f'{alias}  {date_str}', cancel=self.cancel)
+                         title=f'{alias}  {date_str}', cancel=self.cancel, picture=picture,
+                         centroid=centroid)
                 self.gif_paths.append(path)
 
     # ---------------------------------------------------------------- end
@@ -329,13 +319,59 @@ def top_flights(flights, color, cage, n=TOP_FLIGHTS):
 
 # ==== GIFs ====
 
+def gif_picture(experiment_dir, date_str, window):
+    """The camera frame a GIF of this window is drawn on: the frame in individual_images/ (one per
+    video segment) from the segment nearest the window's middle on that day, else the experiment's
+    reference frame (clock_analysis.cage_reference_image). None if there is none."""
+    _label, lo_min, hi_min = ca.parse_window(window)
+    mid = datetime.strptime(date_str, '%Y-%m-%d') + timedelta(minutes=(lo_min + hi_min) / 2.0)
+    folder = os.path.join(experiment_dir, 'individual_images')
+    best = None
+    names = os.listdir(folder) if os.path.isdir(folder) else []
+    for name in names:
+        m = _FRAME_RE.match(name)
+        if not m:
+            continue
+        try:
+            start = datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+        except ValueError:
+            continue
+        middle = start + timedelta(seconds=ca.SEGMENT_SECONDS * (int(m.group(3)) + 0.5))
+        gap = abs((middle - mid).total_seconds())
+        if best is None or gap < best[0]:
+            best = (gap, os.path.join(folder, name))
+    if best is not None and best[0] <= 6 * 3600:
+        return best[1]
+    return ca.cage_reference_image(experiment_dir)
+
+
+def _load_picture(path):
+    """A camera frame as grey values 0-1 (contrast stretched, then faded towards white by
+    GIF_PHOTO_FADE so the paths stand out), or None when it cannot be read."""
+    if not path:
+        return None
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as img:
+            grey = ImageOps.autocontrast(img.convert('L'), cutoff=1)
+            g = np.asarray(grey, dtype=float) / 255.0
+    except Exception:
+        return None
+    return 1.0 - GIF_PHOTO_FADE * (1.0 - g)
+
+
 def _gif_palette(color):
-    """A fixed palette (white, greys, white -> colour, black) so every frame maps the same way."""
+    """A fixed palette so every frame maps the same way: greys (the cage picture, text), white ->
+    colour, the colour over grey at the alphas the paths build up to, and black -> colour (dots)."""
     from PIL import Image
     c = np.array(to_rgb(color))
-    a = np.linspace(0, 1, 96)[:, None]
-    cols = np.vstack([np.linspace(1, 0, 96)[:, None].repeat(3, 1), 1 - a * (1 - c),
-                      np.linspace(0, 1, 64)[:, None] * c])
+    a = np.linspace(0, 1, 48)[:, None]
+    greys = np.linspace(1.0 - GIF_PHOTO_FADE, 1.0, 12)
+    alphas = 1.0 - (1.0 - GIF_BUILT_ALPHA) ** np.arange(1, 10)        # 1, 2, ... 9 paths on top
+    alphas = np.append(alphas[:8], 0.95)
+    over = [g * (1 - al) + c * al for g in greys for al in alphas]
+    cols = np.vstack([np.linspace(1, 0, 64)[:, None].repeat(3, 1), 1 - a * (1 - c), np.array(over),
+                      np.linspace(0, 1, 36)[:, None] * c])
     pal = np.clip(np.rint(cols * 255), 0, 255).astype(np.uint8)[:256]
     img = Image.new('P', (1, 1))
     img.putpalette(pal.ravel().tolist() + [0] * (768 - pal.size))
@@ -343,10 +379,14 @@ def _gif_palette(color):
 
 
 def make_gif(flights, date_str, window, path, color, cage, half, speedup=GIF_SPEEDUP, title='',
-             cancel=None):
+             cancel=None, picture=None, centroid=None):
     """Replay one window's flights (centred coordinates) as a GIF, speedup x real time, GIF_FPS
-    frames a second; each frame shows the flight of the last GIF_TRAIL_STEPS steps, the latest
-    step strongest, and a dot where each flyer is. A set `cancel` Event raises Cancelled."""
+    frames a second. The paths build up: everything flown so far stays drawn faintly
+    (GIF_BUILT_ALPHA), so the flights overlay each other and busy places darken towards the full
+    colour; the last frame shows every flight of the window and is held GIF_HOLD_MS. The latest
+    step is drawn strongly, with a dark dot where each flyer is. picture: a camera frame (path,
+    e.g. gif_picture()) drawn behind in grey, with centroid the cage centre in its pixels; without
+    one the cage outline is drawn on white. A set `cancel` Event raises Cancelled."""
     from PIL import Image
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     label, lo_min, hi_min = ca.parse_window(window)
@@ -362,52 +402,80 @@ def make_gif(flights, date_str, window, path, color, cage, half, speedup=GIF_SPE
         xy, t, fid = xy[o], t[o], fid[o]
     else:
         xy, t, fid = np.empty((0, 2)), np.empty(0, np.int64), np.empty(0, int)
+    # each point's previous point in its own flight (-1 for a flight's first), so that a step's
+    # path joins on to the step before
+    prev = np.full(len(t), -1)
+    if len(t):
+        k = np.lexsort((np.arange(len(t)), fid))       # by flight, then in time order
+        same = fid[k][1:] == fid[k][:-1]
+        prev[k[1:][same]] = k[:-1][same]
 
     fig = Figure(figsize=(GIF_INCHES, GIF_INCHES + 0.35), dpi=GIF_DPI)
     canvas = FigureCanvasAgg(fig)
     ax = fig.add_axes([0.01, 0.01, 0.98, GIF_INCHES / (GIF_INCHES + 0.35) - 0.02])
+    grey = _load_picture(picture) if centroid is not None else None
+    if grey is not None:                               # the camera's view of the cage, in grey
+        cx, cy = (float(v) for v in centroid)
+        h, w = grey.shape
+        ax.imshow(grey, cmap='gray', vmin=0, vmax=1, origin='upper', interpolation='bilinear',
+                  extent=[-0.5 - cx, w - 0.5 - cx, h - 0.5 - cy, -0.5 - cy], zorder=0)
+    else:
+        ring = np.vstack([cage, cage[:1]])
+        ax.plot(ring[:, 0], ring[:, 1], color='0.75', lw=0.8)
     _blank(ax, half)
-    ring = np.vstack([cage, cage[:1]])
-    ax.plot(ring[:, 0], ring[:, 1], color='0.75', lw=0.8)
-    old = LineCollection([], colors=color, alpha=0.25, linewidths=0.8)
-    new = LineCollection([], colors=color, alpha=0.95, linewidths=1.2)
-    ax.add_collection(old)
-    ax.add_collection(new)
-    heads = ax.scatter([], [], s=9, color=color, zorder=3)
-    text = fig.text(0.02, 0.985, '', ha='left', va='top', fontsize=9)
     fig.text(0.98, 0.985, f'{title}  ({speedup:g}x)', ha='right', va='top', fontsize=8, color='0.35')
+    # drawn by hand on top of a kept background (blitting), not by canvas.draw()
+    built = LineCollection([], colors=color, alpha=GIF_BUILT_ALPHA, linewidths=0.7, animated=True)
+    new = LineCollection([], colors=color, alpha=0.95, linewidths=1.3, animated=True)
+    ax.add_collection(built)
+    ax.add_collection(new)
+    heads = ax.scatter([], [], s=10, color=np.array(to_rgb(color)) * 0.5, zorder=3, animated=True)
+    text = fig.text(0.02, 0.985, '', ha='left', va='top', fontsize=9, animated=True)
     palette = _gif_palette(color)
     dither = getattr(getattr(Image, 'Dither', Image), 'NONE', 0)
     frames = []
 
     def segments(a, b):
-        if b - a < 2:
+        """The flights' paths through the points [a, b), each joined to its point before a."""
+        if b <= a:
             return []
-        k = np.lexsort((t[a:b], fid[a:b]))
-        p, f = xy[a:b][k], fid[a:b][k]
-        cut = np.nonzero(np.diff(f))[0] + 1
-        return [s for s in np.split(p, cut) if len(s) >= 2]
+        idx = np.arange(a, b)[np.argsort(fid[a:b], kind='stable')]
+        out = []
+        for g in np.split(idx, np.nonzero(np.diff(fid[idx]))[0] + 1):
+            if prev[g[0]] >= 0:
+                g = np.concatenate([[prev[g[0]]], g])
+            if len(g) >= 2:
+                out.append(xy[g])
+        return out
 
+    canvas.draw()
+    background = canvas.copy_from_bbox(fig.bbox)      # the cage and title; then the built-up paths
+    done = 0                                           # points already in the background
     for i in range(n_frames):
         if cancel is not None and i % 25 == 0 and cancel.is_set():
             raise ca.Cancelled()
         t1 = lo + (i + 1) * step
-        a, m, b = np.searchsorted(t, [t1 - GIF_TRAIL_STEPS * step, t1 - step, t1])
-        old.set_segments(segments(a, m + 1))
-        new.set_segments(segments(m, b))
-        if b > m:
-            last = np.unique(fid[m:b][::-1], return_index=True)[1]
-            heads.set_offsets(xy[m:b][::-1][last])
-        else:
-            heads.set_offsets(np.empty((0, 2)))
+        b = int(np.searchsorted(t, t1))
+        canvas.restore_region(background)
+        if b > done:                                   # this step joins the built-up paths
+            built.set_segments(segments(done, b))
+            ax.draw_artist(built)
+            background = canvas.copy_from_bbox(fig.bbox)
+            new.set_segments(segments(done, b))
+            ax.draw_artist(new)
+            last = np.unique(fid[done:b][::-1], return_index=True)[1]
+            heads.set_offsets(xy[done:b][::-1][last])
+            ax.draw_artist(heads)
+        done = b
         clock = pd.Timestamp(int(t1)).strftime('%H:%M:%S')
         text.set_text(f'{clock}   {label}')
-        canvas.draw()
-        rgb = Image.fromarray(np.asarray(canvas.buffer_rgba())[..., :3])
+        fig.draw_artist(text)
+        rgb = Image.fromarray(np.array(canvas.buffer_rgba())[..., :3])
         frames.append(rgb.quantize(palette=palette, dither=dither))
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    frames[0].save(path, save_all=True, append_images=frames[1:], duration=int(1000 / GIF_FPS),
-                   loop=0)
+    durations = [int(1000 / GIF_FPS)] * len(frames)
+    durations[-1] = GIF_HOLD_MS
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=durations, loop=0)
     return path
 
 

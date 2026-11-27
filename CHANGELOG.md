@@ -5,6 +5,22 @@ day-by-day working notes.
 
 ## [Unreleased]
 
+- **BuzzSwarm: GIFs build up the flight paths on the cage picture.** Each flight now stays drawn
+  (faintly) after it is flown instead of fading after a few seconds, so the paths overlay each
+  other and busy places darken; the last frame shows every flight of the window and is held for
+  2.5 s. The newest part of each flight is drawn strongly, with a dark dot on the flyer. GIFs are
+  drawn on the camera's picture of the cage (that day's frame nearest the window from
+  `individual_images/`, else the experiment's reference frame, in grey), with a white background
+  only when there is no picture.
+
+- **BuzzSwarm: heatmaps on white, in a colour of your choice.** The grid heatmaps ("where the
+  real flight is") now default to white to each group's colour, like the paper-style heatmaps,
+  instead of the dark magma colour map (empty cells were black); with several groups each panel
+  gets its own colour bar, on one shared scale per row. **Colour** also takes one colour for
+  every heatmap (white to it): **Colour...** opens a colour picker, or type a name (`red`) or a
+  colour number (`#d62728`, `d62728` or `214, 39, 40`); a swatch shows it. Colour maps still work. On white, the cage border is grey
+  and the swarm zone black. CLI: `--heatmap-colour '#d62728'`.
+
 - **BuzzSwarm: speed filter switch.** Plotting → Swarming → **Speed filter** (on by default). Off,
   every tracked flight point counts, not only real flight (>= 3 px/frame on the old camera), e.g.
   to see slow flight at a feeder. It changes the swarm size, mosquitoes in flight, the grid

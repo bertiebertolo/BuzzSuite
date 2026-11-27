@@ -14,7 +14,8 @@ group's units, with the units themselves drawn faintly behind.
   swarm_distribution    how often each swarm size occurs per window, against independent joining
   swarm_vs_flying       swarm size and share of flyers in the swarm at the same number flying
   centre_profile        real-flight density vs distance from the centre (filled swarm vs ring)
-  heatmaps              where the real flight is, per window and group
+  heatmaps              where the real flight is, per window and group (white -> each group's
+                        colour, white -> one chosen colour, or a colormap: heat_colormap)
 
 render_all() writes each figure as PNG plus the numbers it shows as CSV.
 """
@@ -27,6 +28,7 @@ import textwrap
 
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap, is_color_like, to_hex, to_rgba
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 
@@ -45,6 +47,7 @@ except ImportError:
 GROUP_PALETTE = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                  '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 MODES = ('overlay', 'individual', 'continuous')
+GROUP_COLOUR = 'group colour'   # heatmaps: white -> each group's colour (the fruitless paper's)
 DEFAULT_METRICS = ['swarm_mean', 'n_flying', 'shape_index', 'speed_px_s']
 WINDOW_METRICS = ['swarm_mean', 'swarm_ge3_frac', 'n_flying', 'shape_index', 'core_density',
                   'central_enrichment', 'speed_px_s', 'turning_deg_s', 'nn_px', 'near_ratio',
@@ -480,22 +483,93 @@ def centre_profile(profile):
     return fig, pd.concat(rows, ignore_index=True)
 
 
+def _colormap(name):
+    """The matplotlib colormap of that name, or None when there is none."""
+    try:
+        from matplotlib import colormaps
+    except ImportError:                                     # matplotlib < 3.5
+        from matplotlib import cm
+        try:
+            return cm.get_cmap(name)
+        except ValueError:
+            return None
+    try:
+        return colormaps[name]
+    except KeyError:
+        return None
+
+
+def _colour_code(name):
+    """A colour number as #rrggbb: 'd62728' (hex without the #) or '214, 39, 40' (red, green, blue,
+    0-255); anything else unchanged."""
+    if re.fullmatch(r'[0-9a-fA-F]{6}', name):
+        return '#' + name.lower()
+    m = re.fullmatch(r'\(?\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*\)?', name)
+    if m and all(int(v) <= 255 for v in m.groups()):
+        return '#%02x%02x%02x' % tuple(int(v) for v in m.groups())
+    return name
+
+
+def check_heat_colour(name):
+    """The heatmaps' colour setting: GROUP_COLOUR (white -> each group's colour), one colour
+    (white -> that colour: a name such as red or tab:red, or a number: #d62728, d62728 or
+    214, 39, 40, which come back as #d62728) or a matplotlib colormap (e.g. magma, viridis,
+    Greys_r). A name that is both, e.g. pink, is the colormap. Raises ValueError otherwise."""
+    name = str(name or GROUP_COLOUR).strip()
+    if name.lower() == GROUP_COLOUR:
+        return GROUP_COLOUR
+    if _colormap(name) is not None:
+        return name
+    name = _colour_code(name)
+    if is_color_like(name) and to_rgba(name)[3] > 0:
+        return name
+    raise ValueError(f'{name!r} is neither a colour (e.g. red, #d62728 or 214, 39, 40) nor a '
+                     'matplotlib colormap (e.g. magma, viridis)')
+
+
+def one_heat_colour(colour):
+    """The #rrggbb code when the heatmap colour setting is one colour; None for GROUP_COLOUR, a
+    colormap or anything that is not a colour."""
+    try:
+        colour = check_heat_colour(colour)
+    except ValueError:
+        return None
+    if colour == GROUP_COLOUR or _colormap(colour) is not None:
+        return None
+    return to_hex(colour)
+
+
+def heat_colormap(colour, group_colour):
+    """The colormap of one heatmap panel: white -> the group's colour (GROUP_COLOUR), white -> one
+    chosen colour, or a named matplotlib colormap (see check_heat_colour)."""
+    if colour == GROUP_COLOUR:
+        return LinearSegmentedColormap.from_list('group', ['white', group_colour])
+    cmap = _colormap(colour)
+    if cmap is not None:
+        return cmap
+    return LinearSegmentedColormap.from_list('one colour', ['white', colour])
+
+
 def _light_low_end(cmap):
-    """True when the colormap starts light (e.g. Greys, Blues), so overlays must be dark."""
-    from matplotlib import colormaps
-    r, g, b = colormaps[cmap](0.0)[:3] if isinstance(cmap, str) else cmap(0.0)[:3]
+    """True when the colormap starts light (white -> a colour, Greys, Blues), so overlays must be
+    dark."""
+    r, g, b = cmap(0.0)[:3]
     return 0.299 * r + 0.587 * g + 0.114 * b > 0.6
 
 
-def heatmaps(heatmap, geometry=None, cmap='magma'):
+def heatmaps(heatmap, geometry=None, colour=GROUP_COLOUR):
     """Rows = windows, columns = groups: share of real flight per cell around the cage centre
     (mean of the group's days; image orientation, camera below). Cage outline and the swarm
-    zone are drawn on top. Colours are shared along each row; cmap is a matplotlib colormap."""
+    zone are drawn on top. The scale is shared along each row. colour: GROUP_COLOUR (white ->
+    each group's colour, a colour bar per panel), one colour (white -> it) or a colormap name."""
     if heatmap.empty:
         return None, None
     geometry = geometry or {}
-    border, zone = ('0.2', 'tab:blue') if _light_low_end(cmap) else ('w', 'c')
     groups = _groups(heatmap)
+    colors = group_colors(groups)
+    cmaps = {g: heat_colormap(colour, colors[g]) for g in groups}
+    per_group = colour == GROUP_COLOUR and len(groups) > 1     # a colour bar for each panel
+    border, zone = ('0.45', 'k') if _light_low_end(cmaps[groups[0]]) else ('w', 'c')
     order = _window_order(heatmap['window'])
     # the experiments' own cell size (it scales with their swarm zone); with several sizes, the
     # largest, into which the smaller cells are summed by their centres
@@ -505,7 +579,8 @@ def heatmaps(heatmap, geometry=None, cmap='magma'):
     half = float(max(heatmap.x_px.abs().max(), heatmap.y_px.abs().max())) + cell / 2.0
     edges = np.arange(-half, half + cell / 2.0, cell)
     n = len(edges) - 1
-    fig = Figure(figsize=(3.6 * len(groups) + 1.0, 3.4 * len(order) + 0.6), layout='constrained')
+    fig = Figure(figsize=((4.2 if per_group else 3.6) * len(groups) + 1.0, 3.4 * len(order) + 0.6),
+                 layout='constrained')
     axes = fig.subplots(len(order), len(groups), squeeze=False)
     rows = []
     for ri, w in enumerate(order):
@@ -536,7 +611,10 @@ def heatmaps(heatmap, geometry=None, cmap='magma'):
                 ax.set_title(f'{w}\n{g}', fontsize=9)
                 continue
             im = ax.imshow(grids[g], origin='upper', extent=[-half, half, half, -half],
-                           cmap=cmap, vmin=0, vmax=vmax, interpolation='nearest')
+                           cmap=cmaps[g], vmin=0, vmax=vmax, interpolation='nearest')
+            if per_group:
+                fig.colorbar(im, ax=ax, shrink=0.85,
+                             label='Share of real flight per cell' if g == groups[-1] else None)
             for exp in heatmap.loc[heatmap.group == g, 'experiment'].unique():
                 geo = geometry.get(exp)
                 if not geo:
@@ -551,9 +629,9 @@ def heatmaps(heatmap, geometry=None, cmap='magma'):
             ax.set_xlim(-half, half)
             ax.set_ylim(half, -half)
             ax.set_title(f'{w}\n{g}', fontsize=9)
-        if im is not None:
+        if im is not None and not per_group:
             fig.colorbar(im, ax=list(axes[ri, :]), shrink=0.85, label='Share of real flight per cell')
-    names = {'w': 'white', 'c': 'cyan', '0.2': 'dark grey', 'tab:blue': 'blue'}
+    names = {'w': 'white', 'c': 'cyan', '0.45': 'grey', 'k': 'black'}
     fig.suptitle(f'Where the real flight is (seen from below;\n{names[zone]} = swarm zone, '
                  f'{names[border]} = cage border)', fontsize=10)
     return fig, (pd.concat(rows, ignore_index=True) if rows else None)
@@ -574,11 +652,12 @@ def speed_filter_note(geometry):
 
 
 def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAULT_NIGHT, dpi=120,
-               progress=None, cancel=None, heat_cmap='magma'):
+               progress=None, cancel=None, heat_colour=GROUP_COLOUR):
     """Draw every plot from run()/load_outputs() tables into out_dir (PNG + CSV of the numbers
     shown). Returns the PNG paths, headline swarm plots first. progress(fraction, message);
-    a set `cancel` Event raises clock_analysis.Cancelled between plots. heat_cmap: the grid
-    heatmaps' colormap. Every figure says so when the speed filter was off (speed_filter_note)."""
+    a set `cancel` Event raises clock_analysis.Cancelled between plots. heat_colour: the grid
+    heatmaps' colour (see check_heat_colour). Every figure says so when the speed filter was
+    off (speed_filter_note)."""
     os.makedirs(out_dir, exist_ok=True)
     metrics = metrics or DEFAULT_METRICS
     note = speed_filter_note(tables.get('geometry'))
@@ -588,7 +667,7 @@ def render_all(tables, out_dir, mode='overlay', metrics=None, night=ld_dd.DEFAUL
         ('swarm_timecourse', lambda: swarm_timecourse(t['minutes'], night)),
         ('swarm_size_distribution', lambda: swarm_distribution(t['swarm_size'], t['minutes'])),
         ('swarm_vs_flying', lambda: swarm_vs_flying(t['minutes'], night)),
-        ('heatmaps', lambda: heatmaps(t['heatmap'], tables.get('geometry'), heat_cmap)),
+        ('heatmaps', lambda: heatmaps(t['heatmap'], tables.get('geometry'), heat_colour)),
         ('centre_profile', lambda: centre_profile(t['profile'])),
         ('window_summary', lambda: window_summary(t['windows'])),
     ]

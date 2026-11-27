@@ -13,7 +13,9 @@ Outputs:
   - per experiment: CSVs + day caches in {exp}/plots/buzzswarm/ (day_cache/ holds ~150 MB a day);
   - figures: {exp}/plots/buzzswarm/figures/ for one experiment, or a package-level
     plots/buzzswarm_comparison/{GroupA}__{GroupB}/ when several are compared. The
-    fruitless-paper style heatmaps (bins and colour chosen here), flight paths (figures/flights/)
+    fruitless-paper style heatmaps (bins and colour chosen here; the colour -- group colour, one
+    colour from the picker or typed as a code, or a colour map -- is the grid heatmaps' too),
+    flight paths (figures/flights/)
     and "Make GIFs" (figures/gifs/) come from buzzswarm/flight_maps.py, drawn from the day caches.
 Each experiment's day selection and night hours are saved on Run in its ld_dd_schedule.json
 (ld_dd.BUZZSWARM_DAYS_KEY; the night hours are shared with the Activity tab, the day selection
@@ -31,7 +33,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, colorchooser
 
 import ld_dd
 from tooltip import add_tooltip
@@ -290,9 +292,21 @@ class BuzzswarmTabManager:
         self.heat_colour_var = tk.StringVar(value=saved.get('heat_colour') or 'group colour')
         self.heat_colour_combo = ttk.Combobox(row, textvariable=self.heat_colour_var, width=16)
         self.heat_colour_combo.pack(side=tk.LEFT, padx=(4, 0))
-        add_tooltip(self.heat_colour_combo, "Group colour = white to the group's colour, as in the "
-                    "fruitless paper. Or a colour map: pick one or type any matplotlib name (add _r "
-                    "to reverse it, e.g. Greys_r). A colour map is used for the grid heatmaps too.")
+        add_tooltip(self.heat_colour_combo, "The colour of every heatmap (paper-style and grid). "
+                    "Group colour = white to each group's colour, as in the fruitless paper. One "
+                    "colour = white to that colour, the same for every group: pick it with "
+                    "Colour..., choose one from the list, or type a name (e.g. red) or a colour "
+                    "number (#d62728, d62728 or red, green, blue as 214, 39, 40). Or a colour map: "
+                    "pick one or type any matplotlib name (add _r to reverse it, e.g. Greys_r). "
+                    "Redraw plots applies a change.")
+        self.heat_swatch = tk.Label(row, width=2, relief=tk.GROOVE)
+        self.heat_swatch.pack(side=tk.LEFT, padx=(4, 0))
+        pick = tk.Button(row, text="Colour...", command=self._on_pick_colour)
+        pick.pack(side=tk.LEFT, padx=(4, 0))
+        add_tooltip(pick, "Choose one colour for the heatmaps (white to that colour) in a colour "
+                    "picker. Its code (e.g. #d62728) goes in the box.")
+        self._swatch_bg = self.heat_swatch.cget("background")
+        self.heat_colour_var.trace_add("write", lambda *_a: self._update_heat_swatch())
         self.flight_paths_var = tk.BooleanVar(value=bool(saved.get('flight_paths', True)))
         paths_check = tk.Checkbutton(fm_frame, text="Flight paths and the 30 longest flights",
                                      variable=self.flight_paths_var)
@@ -310,7 +324,9 @@ class BuzzswarmTabManager:
         gif_btn = tk.Button(row, text="Make GIFs", command=self._on_gifs_clicked)
         gif_btn.pack(side=tk.LEFT, padx=(8, 0))
         add_tooltip(gif_btn, "Replay each clock window (e.g. dawn, midday, dusk) of every ticked day "
-                    "as a GIF. Uses the days Run analysis has cached (about 10 s per GIF).")
+                    "as a GIF on the camera's picture of the cage (that day's, nearest the window). "
+                    "The flight paths build up over each other, so the last frame shows every "
+                    "flight of the window. Uses the days Run analysis has cached (about 10 s per GIF).")
 
         run_btn = tk.Button(controls, text="Run analysis", command=self._on_run_clicked)
         run_btn.pack(side=tk.TOP, fill=tk.X, pady=(0, 3))
@@ -402,6 +418,7 @@ class BuzzswarmTabManager:
             return
         ca, cp = _engine()
         self.heat_colour_combo['values'] = _flight_maps().COLOURS
+        self._update_heat_swatch()
         if not self.window_listbox.size():
             self._on_default_windows()
         chosen = self._saved_metrics if isinstance(self._saved_metrics, list) else cp.DEFAULT_METRICS
@@ -782,6 +799,7 @@ class BuzzswarmTabManager:
         except ValueError as exc:
             self.ui_manager.show_error("BuzzSwarm", f"Heatmap colour: {exc}.")
             return None
+        self.heat_colour_var.set(heat_colour)        # e.g. 214, 39, 40 shows as #d62728
         try:
             gif_speedup = float(str(self.gif_speedup_var.get()).strip())
         except ValueError:
@@ -844,8 +862,6 @@ class BuzzswarmTabManager:
         view = snap['view']
         n_days = sum(len(x['days']) for x in snap['experiments'])
 
-        fm = _flight_maps()
-
         def work(report, cancel):
             figures = self._paper_figures(snap, cancel)
             tables = ca.run(snap['experiments'], view['bin_minutes'], view['windows'],
@@ -854,16 +870,25 @@ class BuzzswarmTabManager:
                             on_day=figures.add_day, speed_filter=view['speed_filter'])
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
                                   progress=lambda f, msg: report(0.85 + 0.1 * f, msg), cancel=cancel,
-                                  heat_cmap=self._grid_cmap(view, fm))
+                                  heat_colour=view['heat_colour'])
             report(0.96, "drawing the paper-style heatmaps")
             return {'paths': paths + figures.finish(), 'dir': snap['fig_dir'], 'missing': []}
         self._dispatch(work, f"analysis of {n_days} day(s)")
 
-    @staticmethod
-    def _grid_cmap(view, fm):
-        """The grid heatmaps keep magma unless a colour map was chosen."""
-        colour = view.get('heat_colour') or fm.GROUP_COLOUR
-        return 'magma' if colour == fm.GROUP_COLOUR else colour
+    def _update_heat_swatch(self):
+        """Show the chosen single colour next to the box (blank for group colour or a colour map)."""
+        if not self._metric_vars:        # the engine (and matplotlib) are not loaded yet
+            return
+        colour = _engine()[1].one_heat_colour(self.heat_colour_var.get())
+        self.heat_swatch.configure(background=colour or self._swatch_bg)
+
+    def _on_pick_colour(self):
+        """One heatmap colour (white -> it) from the system colour picker, written as its code."""
+        start = _engine()[1].one_heat_colour(self.heat_colour_var.get()) or '#1f77b4'
+        _rgb, code = colorchooser.askcolor(color=start, title="Heatmap colour",
+                                           parent=self.heat_colour_combo)
+        if code:
+            self.heat_colour_var.set(str(code))
 
     def _paper_figures(self, snap, cancel, experiments=None, gifs=False):
         view = snap['view']
@@ -922,7 +947,7 @@ class BuzzswarmTabManager:
                            if a in groups and bool(g.get('speed_filter', True)) != view['speed_filter'])
             paths = cp.render_all(tables, snap['fig_dir'], view['mode'], view['metrics'], snap['night'],
                                   progress=lambda f, msg: report(0.1 + 0.3 * f, msg), cancel=cancel,
-                                  heat_cmap=self._grid_cmap(view, fm))
+                                  heat_colour=view['heat_colour'])
             # the paper-style figures come from the day caches, for the days already analysed
             gone = set(missing)
             analysed = [dict(x, days=[d for d in x['days'] if (x['alias'], d) not in gone])
